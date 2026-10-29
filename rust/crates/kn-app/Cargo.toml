@@ -1,0 +1,26 @@
+[package]
+name = "kindlia-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kindlia"
+path = "src/main.rs"
+
+[dependencies]
+kn-platform.workspace = true
+kn-render.workspace = true
+kn-ui.workspace = true
+kn-text.workspace = true
+kn-net = { path = "../kn-net" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+toml = "0.8"
+url = "2"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+roxmltree = "0.20"
+libc.workspace = true
+simplecss = "0.2.2"
+zhconv = { version = "0.4.2", default-features = false, features = ["opencc-hans", "opencc-hant"] }

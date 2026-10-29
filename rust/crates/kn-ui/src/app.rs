@@ -1,0 +1,1521 @@
+//! 页面栈与主循环。
+//!
+//! 页面 (`Page`) 只关心: 进入/离开、渲染、处理输入、接收自己发起的后台任务结果、空闲工作。
+//! 导航通过返回 `Transition` 表达, 由运行时统一维护页面栈 (最多 20 层, 与 Python 版一致)。
+//!
+//! 后台任务结果按"页面实例"路由: 每个入栈的页面分配唯一实例号, `cx.spawn` 记住发起者,
+//! 结果只投递给仍在栈中的那个实例 (`Page::on_message`); 页面已关闭则丢弃 ——
+//! 页面状态因此可以完全放在页面自身, 不需要 Python 版那样的模块级全局 STATE。
+
+use std::any::Any;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use kn_platform::{Display, GestureKind, InputEvent, InputReader, KeyCode, PowerEvent, PowerMonitor, Rotation, SwipeDir};
+
+/// 按下电源键后等待系统进入屏保的时限; 超时说明这次按键没有引起休眠, 重新接管屏幕。
+const POWER_KEY_GRACE: Duration = Duration::from_secs(15);
+use kn_render::{Bitmap, FontStore, GlyphCache, Point, Rect};
+
+use crate::hits::Hits;
+use crate::refresh::{RefreshHint, RefreshScheduler, UiRefreshMode};
+use crate::tasks::{Lane, Poster, Submitter, Tasks, Waker};
+
+/// 网络队列的线程数 (本地队列另有 1 个线程, 见 `tasks::Lane`)。
+const NET_WORKERS: usize = 3;
+use crate::theme::Theme;
+
+/// 页面标识 (应用层定义的枚举序号)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PageId(pub u16);
+
+/// 页面要求的屏幕方向 (软件旋转, 见 `kn_platform::Rotation`)。横屏时 `Cx` 的宽高互换。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Orientation {
+    #[default]
+    Portrait,
+    /// 横屏, 设备向左转 (逆时针) 拿: 原来的底边在右手边
+    LandscapeLeft,
+    /// 横屏, 设备向右转 (顺时针) 拿: 原来的底边在左手边
+    LandscapeRight,
+}
+
+impl Orientation {
+    pub fn rotation(self) -> Rotation {
+        match self {
+            Orientation::Portrait => Rotation::new(0),
+            Orientation::LandscapeLeft => Rotation::new(1),
+            Orientation::LandscapeRight => Rotation::new(3),
+        }
+    }
+
+    pub fn is_landscape(self) -> bool {
+        self != Orientation::Portrait
+    }
+}
+
+/// 页面处理事件后的导航意图。
+pub enum Transition<A> {
+    None,
+    /// 压栈进入新页面
+    Push(Box<dyn Page<A>>),
+    /// 替换当前页面 (章节切换)
+    Replace(Box<dyn Page<A>>),
+    /// 返回上一页 (栈空则回首页)
+    Back,
+    /// 清栈回首页
+    Home,
+    /// 清栈并以该页面为根 (标签页切换)
+    Root(Box<dyn Page<A>>),
+    /// 退出应用
+    Exit,
+}
+
+/// 弹窗式页面 (不重画背景, 只刷新弹窗) 的背景来源。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backdrop {
+    None,
+    /// 屏幕上现在的画面 (启动画面、屏保): 从帧缓冲读回, 背景一个像素都不刷新
+    Screen,
+    /// 栈里下面那一页重新画一遍 (不带按下反馈的反相)
+    Below,
+}
+
+/// 应用状态需要实现的最小接口。
+pub trait App: Sized + 'static {
+    fn home_page(&mut self) -> Box<dyn Page<Self>>;
+    fn theme(&self) -> Theme;
+    fn ui_refresh_mode(&self) -> UiRefreshMode {
+        UiRefreshMode::Smooth
+    }
+    /// 每分钟时钟走动时调用 (顶栏时间/电量), 返回是否需要重绘。
+    fn on_minute(&mut self) -> bool {
+        true
+    }
+    /// 休眠前 (落盘阅读进度等)。
+    fn on_suspend(&mut self) {}
+    fn on_resume(&mut self) {}
+    /// 自己画的屏保 (例如当前书的封面)。返回 Some 时运行时在进入屏保时把它渲染出来、整屏闪刷,
+    /// 再交还框架; 前提是系统屏保已被卸载 (启动脚本 `lipc-set-prop com.lab126.blanket unload screensaver`),
+    /// 否则会被系统锁屏盖掉。
+    fn sleep_screen(&mut self) -> Option<Box<dyn Page<Self>>> {
+        None
+    }
+    /// 启动画面 (应用在 `run` 之前自己画到屏幕上) 最多保留多久: 首页 [`Page::ready`] 之前不画第一帧,
+    /// 省掉一屏「加载中」。ZERO = 不等。
+    fn startup_hold(&self) -> Duration {
+        Duration::ZERO
+    }
+    /// 启动后、首页进入之后调用一次 (例如用 `cx.spawn_app` 开始后台登录, 结果经任务池送回)。
+    fn on_start(_cx: &mut Cx<Self>) {}
+    /// 每个后台结果处理完后、休眠唤醒后调用: 应用全局想做的导航 (例如保存的账号失效 → 登录页)。不支持 `Exit`。
+    /// `top` = 当前栈顶页面 (例如只在首页类页面上弹提示)。
+    fn take_transition(&mut self, _top: PageId) -> Transition<Self> {
+        Transition::None
+    }
+}
+
+/// 后台结果的投递目标。
+pub enum Delivery<A> {
+    /// 交给应用全局状态
+    App(Box<dyn FnOnce(&mut A) + Send>),
+    /// 交给某个页面实例
+    Page { instance: u64, msg: Box<dyn Any + Send> },
+}
+
+/// 渲染/事件处理时可用的上下文。
+pub struct Cx<'a, A: App> {
+    pub app: &'a mut A,
+    pub fonts: &'a mut FontStore,
+    pub glyphs: &'a mut GlyphCache,
+    pub hits: &'a mut Hits,
+    pub theme: Theme,
+    pub width: u32,
+    pub height: u32,
+    instance: u64,
+    tasks: &'a Tasks<Delivery<A>>,
+    alive: &'a Alive,
+    redraw: &'a mut Option<RefreshHint>,
+    swipe: &'a mut Option<SwipeDir>,
+    clean: &'a mut Vec<Rect>,
+    timers: &'a mut Timers,
+}
+
+/// 还在页面栈里的实例号 (工作线程开工前查, 见 `Cx::spawn_droppable`)。栈最多 20 层, 用 Vec 即可。
+#[derive(Clone, Default)]
+pub(crate) struct Alive(std::sync::Arc<std::sync::Mutex<Vec<u64>>>);
+
+impl Alive {
+    fn set(&self, instances: impl Iterator<Item = u64>) {
+        if let Ok(mut v) = self.0.lock() {
+            v.clear();
+            v.extend(instances);
+        }
+    }
+
+    fn contains(&self, instance: u64) -> bool {
+        self.0.lock().map(|v| v.contains(&instance)).unwrap_or(true)
+    }
+}
+
+/// 把页面任务包成投递; `alive` 为 Some 时 (可丢弃的任务) 开工前页面已出栈就跳过。
+fn page_job<A, F, M>(instance: u64, alive: Option<Alive>, work: F) -> impl FnOnce() -> Option<Delivery<A>> + Send + 'static
+where
+    A: 'static,
+    F: FnOnce() -> M + Send + 'static,
+    M: Any + Send + 'static,
+{
+    move || {
+        if alive.is_some_and(|a| !a.contains(instance)) {
+            return None;
+        }
+        Some(Delivery::Page { instance, msg: Box::new(work()) })
+    }
+}
+
+/// 定时器: (到期时刻, 页面实例, 页面自定义 token)。数量很少 (提示条、轮询), 用 Vec 即可。
+#[derive(Default)]
+pub(crate) struct Timers {
+    items: Vec<(std::time::Instant, u64, u32)>,
+}
+
+impl Timers {
+    fn add(&mut self, at: std::time::Instant, instance: u64, token: u32) {
+        // 同一实例的同一 token 只保留最新的一个 (例如提示条重复出现时重新计时)
+        self.items.retain(|(_, i, t)| !(*i == instance && *t == token));
+        self.items.push((at, instance, token));
+    }
+
+    /// 距最近一个到期还有多少毫秒。
+    fn next_ms(&self) -> Option<u64> {
+        let now = std::time::Instant::now();
+        self.items.iter().map(|(at, _, _)| at.saturating_duration_since(now).as_millis() as u64).min()
+    }
+
+    fn take_due(&mut self) -> Vec<(u64, u32)> {
+        let now = std::time::Instant::now();
+        let mut due = Vec::new();
+        self.items.retain(|(at, i, t)| {
+            if *at <= now {
+                due.push((*i, *t));
+                false
+            } else {
+                true
+            }
+        });
+        due
+    }
+}
+
+impl<'a, A: App> Cx<'a, A> {
+    /// 请求重绘; 多次请求合并, 取最强的 hint。
+    pub fn request_redraw(&mut self, hint: RefreshHint) {
+        *self.redraw = Some(match *self.redraw {
+            Some(old) if old.strength() >= hint.strength() => old,
+            _ => hint,
+        });
+    }
+
+    /// 普通 UI 的弹窗/键盘恢复: 经典模式保留旧版清理请求, 流畅模式只做普通重绘。
+    pub fn request_ui_redraw(&mut self, classic_hint: RefreshHint) {
+        let hint = if self.app.ui_refresh_mode() == UiRefreshMode::Classic { classic_hint } else { RefreshHint::Ui };
+        self.request_redraw(hint);
+    }
+
+    /// 清理原控件区域, 即使重绘后像素相同也提交; 不参与全局 hint 的强弱覆盖。
+    pub fn request_clean(&mut self, rect: Rect) {
+        self.clean.push(rect);
+        self.request_redraw(RefreshHint::Ui);
+    }
+
+    /// 阅读翻页: 等同 `request_redraw(Turn)`, 并请求 MTK 原生翻页动画 (方向 = 内容移动方向;
+    /// 设备不支持时显示层忽略, 本次要闪刷时动画让位)。
+    pub fn request_turn(&mut self, swipe: Option<SwipeDir>) {
+        self.request_redraw(RefreshHint::Turn);
+        *self.swipe = swipe;
+    }
+
+    /// 翻页且整屏清理 (漫画: 大面积灰阶, 每页清残影)。显示层让动画让位于清理,
+    /// 避免 FBInk 动画分支把 FULL/GC16 改成 PARTIAL/AUTO。
+    pub fn request_flash_turn(&mut self, swipe: Option<SwipeDir>) {
+        self.request_redraw(RefreshHint::Flash);
+        *self.swipe = swipe;
+    }
+
+    /// `delay` 之后调用当前页面实例的 `on_timer(token)` (页面已关闭则丢弃)。同一 token 重设会覆盖旧的。
+    pub fn after(&mut self, delay: Duration, token: u32) {
+        self.timers.add(std::time::Instant::now() + delay, self.instance, token);
+    }
+
+    /// 后台执行 `work` (网络队列), 其返回值作为消息交给当前页面实例的 `on_message`。
+    /// 页面关掉之后任务照样执行 (进度上传、书架写入等副作用不能丢), 只是结果被丢弃。
+    pub fn spawn<F, M>(&self, work: F)
+    where
+        F: FnOnce() -> M + Send + 'static,
+        M: Any + Send + 'static,
+    {
+        self.tasks.submit(Lane::Net, page_job(self.instance, None, work));
+    }
+
+    /// 同 `spawn`, 但走本地队列: 纯本地的读缓存 / 解析 / 解码 / 排版, 不会被卡在网络上的任务挡住。
+    /// 不要在这里做网络请求 (本地队列只有一个线程)。
+    pub fn spawn_local<F, M>(&self, work: F)
+    where
+        F: FnOnce() -> M + Send + 'static,
+        M: Any + Send + 'static,
+    {
+        self.tasks.submit(Lane::Local, page_job(self.instance, None, work));
+    }
+
+    /// 可丢弃的 `spawn`: 开工前本页面实例已经出栈就不执行。只用于没有副作用、结果只拿来显示的任务
+    /// (封面 / 插图 / 列表的获取与解码); 已经开始的照样跑完 (结果丢弃)。
+    pub fn spawn_droppable<F, M>(&self, work: F)
+    where
+        F: FnOnce() -> M + Send + 'static,
+        M: Any + Send + 'static,
+    {
+        self.tasks.submit(Lane::Net, page_job(self.instance, Some(self.alive.clone()), work));
+    }
+
+    /// 可丢弃的 `spawn_local` (规则同 `spawn_droppable`)。
+    pub fn spawn_local_droppable<F, M>(&self, work: F)
+    where
+        F: FnOnce() -> M + Send + 'static,
+        M: Any + Send + 'static,
+    {
+        self.tasks.submit(Lane::Local, page_job(self.instance, Some(self.alive.clone()), work));
+    }
+
+    /// 可跨线程的提交端, 结果同样交给当前页面实例: 任务里可以接着提交下一步
+    /// (例如本地队列读缓存, 未命中再交给网络队列下载)。线程池已关闭时为 None。
+    pub fn spawner(&self) -> Option<Spawner<A>> {
+        Some(Spawner { instance: self.instance, alive: self.alive.clone(), submitter: self.tasks.submitter()? })
+    }
+
+    /// 后台执行, 结果回调作用于应用全局状态。
+    pub fn spawn_app<F>(&self, work: F)
+    where
+        F: FnOnce() -> Box<dyn FnOnce(&mut A) + Send> + Send + 'static,
+    {
+        self.tasks.spawn(move || Delivery::App(work()));
+    }
+
+    /// 给其它线程 (如网络线程) 用的投递器, 消息发往当前页面实例。
+    pub fn page_poster(&self) -> PagePoster<A> {
+        PagePoster { instance: self.instance, poster: self.tasks.poster() }
+    }
+
+    /// 投递到应用全局状态的投递器。
+    pub fn app_poster(&self) -> Poster<Delivery<A>> {
+        self.tasks.poster()
+    }
+}
+
+/// 绑定到某个页面实例的跨线程投递器。
+pub struct PagePoster<A> {
+    instance: u64,
+    poster: Poster<Delivery<A>>,
+}
+
+impl<A> Clone for PagePoster<A> {
+    fn clone(&self) -> Self {
+        PagePoster { instance: self.instance, poster: self.poster.clone() }
+    }
+}
+
+impl<A: 'static> PagePoster<A> {
+    pub fn post<M: Any + Send + 'static>(&self, msg: M) {
+        self.poster.post(Delivery::Page { instance: self.instance, msg: Box::new(msg) });
+    }
+}
+
+/// 绑定到某个页面实例的跨线程任务提交端 (`Cx::spawner`), 方法与 `Cx` 上的同名方法一致。
+pub struct Spawner<A> {
+    instance: u64,
+    alive: Alive,
+    submitter: Submitter<Delivery<A>>,
+}
+
+impl<A> Clone for Spawner<A> {
+    fn clone(&self) -> Self {
+        Spawner { instance: self.instance, alive: self.alive.clone(), submitter: self.submitter.clone() }
+    }
+}
+
+impl<A: 'static> Spawner<A> {
+    /// 提交到 `lane`; `droppable` 见 `Cx::spawn_droppable`。
+    pub fn spawn_on<F, M>(&self, lane: Lane, droppable: bool, work: F)
+    where
+        F: FnOnce() -> M + Send + 'static,
+        M: Any + Send + 'static,
+    {
+        let alive = droppable.then(|| self.alive.clone());
+        self.submitter.submit(lane, page_job(self.instance, alive, work));
+    }
+
+    pub fn spawn<F, M>(&self, work: F)
+    where
+        F: FnOnce() -> M + Send + 'static,
+        M: Any + Send + 'static,
+    {
+        self.spawn_on(Lane::Net, false, work);
+    }
+
+    pub fn spawn_local<F, M>(&self, work: F)
+    where
+        F: FnOnce() -> M + Send + 'static,
+        M: Any + Send + 'static,
+    {
+        self.spawn_on(Lane::Local, false, work);
+    }
+}
+
+pub trait Page<A: App> {
+    /// 用于调试与"同类页面"判断。
+    fn id(&self) -> PageId;
+
+    /// 本页面的屏幕方向; None = 沿用当前方向 (例如从横屏阅读页打开的插图预览)。
+    /// 进入页面时与每次重绘前查询; 变化时运行时切换方向、整屏闪刷。
+    fn orientation(&self, _app: &A) -> Option<Orientation> {
+        Some(Orientation::Portrait)
+    }
+
+    /// 首页的首批数据到了 (启动时运行时在启动画面上等它, 见 [`App::startup_hold`])。
+    fn ready(&self) -> bool {
+        true
+    }
+
+    /// 进入页面 (首次进入 returning = false; 从上层返回 returning = true)。
+    fn enter(&mut self, _cx: &mut Cx<A>, _returning: bool) {}
+
+    /// 离开页面 (被压栈或弹出前)。
+    fn leave(&mut self, _cx: &mut Cx<A>) {}
+
+    /// 整帧渲染到 `frame` (已用主题背景色清空) 并登记命中区域 (`cx.hits` 已清空)。
+    fn render(&mut self, cx: &mut Cx<A>, frame: &mut Bitmap);
+
+    /// 本帧绘制结果附带的刷新意图, 在 render 后、规划前读取, 不消耗下一帧重绘请求。
+    fn refresh_hint(&self) -> Option<RefreshHint> {
+        None
+    }
+
+    /// 本帧全部更新已成功提交 (不是面板完成通知)。用于记录实际显示的内容元数据。
+    fn presented(&mut self) {}
+
+    /// 处理手势/按键。`Down` 手势也会送达 (多数页面忽略即可)。
+    fn on_input(&mut self, cx: &mut Cx<A>, event: &InputEvent) -> Transition<A>;
+
+    /// 接收本页面实例发起的后台任务结果。
+    fn on_message(&mut self, _cx: &mut Cx<A>, _msg: Box<dyn Any + Send>) {}
+
+    /// `cx.after` 设的定时器到期。
+    fn on_timer(&mut self, _cx: &mut Cx<A>, _token: u32) {}
+
+    /// 即将休眠 (落盘阅读进度等)。在 `App::on_suspend` 之前调用。
+    fn on_suspend(&mut self, _cx: &mut Cx<A>) {}
+
+    /// 系统唤醒后恢复页面自身的计时等状态, 不把休眠时间计入。
+    fn on_resume(&mut self, _cx: &mut Cx<A>) {}
+    /// 弹窗式页面要的背景 (见 [`Backdrop`]); 运行时在下一次绘制前用 [`Page::set_backdrop`] 交给页面一次。
+    fn wants_backdrop(&self) -> Backdrop {
+        Backdrop::None
+    }
+    /// 运行时取到的背景 (`None` = 取不到, 页面自己画个背景)。
+    fn set_backdrop(&mut self, _backdrop: Option<Bitmap>) {}
+
+    /// 页面自己画满整帧 (例如阅读页直接拷贝缓存好的正文位图): 运行时跳过渲染前的背景清空 (整屏 ~4 ms)。
+    fn opaque(&self) -> bool {
+        false
+    }
+
+    /// 进入/返回本页面时运行时是否整屏闪刷 (默认是)。内容异步加载的页面 (阅读页) 返回 false,
+    /// 改为内容就绪时自己请求 `RefreshHint::Flash`, 免得闪刷落在 "加载中" 画面上、正文反而留下残影。
+    fn flash_on_enter(&self) -> bool {
+        true
+    }
+
+    /// 后台结果 (`on_message`) 处理完后, 页面想做的导航 (例如保存成功后返回)。
+    /// 只在本页面位于栈顶时取; 不支持 `Transition::Exit`。
+    fn take_transition(&mut self) -> Transition<A> {
+        Transition::None
+    }
+
+    /// 空闲时调用 (无输入、无手指按下); 返回 true 表示还有空闲工作要做。
+    /// 每次调用应在 ~50 ms 内返回 (例如只预渲染一页)。
+    fn on_idle(&mut self, _cx: &mut Cx<A>) -> bool {
+        false
+    }
+}
+
+const MAX_STACK: usize = 20;
+
+struct Entry<A> {
+    instance: u64,
+    page: Box<dyn Page<A>>,
+}
+
+/// 运行时状态 (除页面栈外的部分), 拆开是为了能同时借用页面与上下文资源。
+struct Runtime<A: App> {
+    app: A,
+    fonts: FontStore,
+    glyphs: GlyphCache,
+    hits: Hits,
+    tasks: Tasks<Delivery<A>>,
+    /// 栈里的页面实例 (每次进入栈顶页面前同步)
+    alive: Alive,
+    redraw: Option<RefreshHint>,
+    swipe: Option<SwipeDir>,
+    clean: Vec<Rect>,
+    /// 逻辑画面尺寸 (横屏时与 panel 互换)
+    width: u32,
+    height: u32,
+    /// 面板 (竖屏) 尺寸
+    panel: (u32, u32),
+    orientation: Orientation,
+    /// 重力感应报告的倒拿 (Oasis / Scribe)
+    upside_down: bool,
+    next_instance: u64,
+    timers: Timers,
+}
+
+impl<A: App> Runtime<A> {
+    fn new(app: A, fonts: FontStore, panel: (u32, u32), waker: &Waker) -> Self {
+        Runtime {
+            app,
+            fonts,
+            glyphs: GlyphCache::new(4 * 1024 * 1024),
+            hits: Hits::default(),
+            tasks: Tasks::with_lanes(NET_WORKERS, 1, waker.clone()),
+            alive: Alive::default(),
+            redraw: None,
+            swipe: None,
+            clean: Vec::new(),
+            width: panel.0,
+            height: panel.1,
+            panel,
+            orientation: Orientation::Portrait,
+            upside_down: false,
+            next_instance: 0,
+            timers: Timers::default(),
+        }
+    }
+
+    /// 按页面要求的方向更新逻辑尺寸 (设备层的旋转由主循环在下一次重绘前跟上)。
+    fn orient_for(&mut self, page: &dyn Page<A>) {
+        if let Some(o) = page.orientation(&self.app) {
+            self.orientation = o;
+            (self.width, self.height) = o.rotation().logical_size(self.panel);
+        }
+    }
+
+    /// 逻辑画面相对面板的旋转 (阅读方向 + 倒拿)。
+    fn rotation(&self) -> Rotation {
+        self.orientation.rotation().then(Rotation::new(if self.upside_down { 2 } else { 0 }))
+    }
+
+    fn cx(&mut self, instance: u64) -> Cx<'_, A> {
+        let theme = self.app.theme();
+        Cx {
+            app: &mut self.app,
+            fonts: &mut self.fonts,
+            glyphs: &mut self.glyphs,
+            hits: &mut self.hits,
+            theme,
+            width: self.width,
+            height: self.height,
+            instance,
+            tasks: &self.tasks,
+            alive: &self.alive,
+            redraw: &mut self.redraw,
+            swipe: &mut self.swipe,
+            clean: &mut self.clean,
+            timers: &mut self.timers,
+        }
+    }
+
+    fn new_entry(&mut self, page: Box<dyn Page<A>>) -> Entry<A> {
+        self.next_instance += 1;
+        Entry { instance: self.next_instance, page }
+    }
+}
+
+/// 页面栈操作 (纯逻辑, 便于测试)。
+struct Stack<A> {
+    entries: Vec<Entry<A>>,
+}
+
+impl<A: App> Stack<A> {
+    fn top(&mut self) -> &mut Entry<A> {
+        self.entries.last_mut().expect("page stack never empty")
+    }
+
+    fn enter_top(&mut self, rt: &mut Runtime<A>, returning: bool) {
+        // 所有改动栈的导航最后都走到这里: 先同步在栈实例, 页面在 enter 里提交的可丢弃任务才不会被误跳过
+        rt.alive.set(self.entries.iter().map(|e| e.instance));
+        let top = self.top();
+        let instance = top.instance;
+        // 先换好方向: 页面在 enter 里就能按新的宽高排版
+        rt.orient_for(&*top.page);
+        top.page.enter(&mut rt.cx(instance), returning);
+        rt.redraw_ui();
+    }
+
+    fn leave_top(&mut self, rt: &mut Runtime<A>) {
+        let top = self.top();
+        let instance = top.instance;
+        top.page.leave(&mut rt.cx(instance));
+    }
+
+    /// 执行导航; 返回 false 表示应退出。
+    fn apply(&mut self, rt: &mut Runtime<A>, transition: Transition<A>) -> bool {
+        let nav_flash = matches!(transition, Transition::Push(_) | Transition::Replace(_) | Transition::Back | Transition::Home);
+        match transition {
+            Transition::None => {}
+            Transition::Push(page) => {
+                self.leave_top(rt);
+                let entry = rt.new_entry(page);
+                self.entries.push(entry);
+                if self.entries.len() > MAX_STACK {
+                    // 最底层永远是首页, 丢弃次底层
+                    self.entries.remove(1);
+                }
+                self.enter_top(rt, false);
+            }
+            Transition::Replace(page) => {
+                self.leave_top(rt);
+                self.entries.pop();
+                let entry = rt.new_entry(page);
+                self.entries.push(entry);
+                self.enter_top(rt, false);
+            }
+            Transition::Back => {
+                self.leave_top(rt);
+                self.entries.pop();
+                if self.entries.is_empty() {
+                    let home = rt.app.home_page();
+                    let entry = rt.new_entry(home);
+                    self.entries.push(entry);
+                    self.enter_top(rt, false);
+                } else {
+                    self.enter_top(rt, true);
+                }
+            }
+            Transition::Home => {
+                self.leave_top(rt);
+                self.entries.clear();
+                let home = rt.app.home_page();
+                let entry = rt.new_entry(home);
+                self.entries.push(entry);
+                self.enter_top(rt, false);
+            }
+            Transition::Root(page) => {
+                self.leave_top(rt);
+                self.entries.clear();
+                let entry = rt.new_entry(page);
+                self.entries.push(entry);
+                self.enter_top(rt, false);
+            }
+            Transition::Exit => {
+                self.leave_top(rt);
+                return false;
+            }
+        }
+        if nav_flash && self.top().page.flash_on_enter() {
+            // 流畅模式导航不主动闪刷; 经典模式保留夜间闪刷。
+            let hint = if rt.app.ui_refresh_mode() == UiRefreshMode::Classic && rt.app.theme().night { RefreshHint::Flash } else { RefreshHint::Ui };
+            if rt.redraw.is_none_or(|h| h.strength() < hint.strength()) {
+                rt.redraw = Some(hint);
+            }
+        }
+        true
+    }
+
+    fn fire_timers(&mut self, rt: &mut Runtime<A>) -> bool {
+        let due = rt.timers.take_due();
+        let any = !due.is_empty();
+        for (instance, token) in due {
+            if let Some(entry) = self.entries.iter_mut().find(|e| e.instance == instance) {
+                entry.page.on_timer(&mut rt.cx(instance), token);
+            }
+        }
+        any
+    }
+
+    fn deliver(&mut self, rt: &mut Runtime<A>, delivery: Delivery<A>) {
+        match delivery {
+            Delivery::App(callback) => callback(&mut rt.app),
+            Delivery::Page { instance, msg } => {
+                if let Some(entry) = self.entries.iter_mut().find(|e| e.instance == instance) {
+                    entry.page.on_message(&mut rt.cx(instance), msg);
+                }
+                if self.top().instance == instance {
+                    match self.top().page.take_transition() {
+                        Transition::None | Transition::Exit => {}
+                        transition => {
+                            self.apply(rt, transition);
+                        }
+                    }
+                }
+            }
+        }
+        let top = self.top().page.id();
+        match rt.app.take_transition(top) {
+            Transition::None | Transition::Exit => {}
+            transition => {
+                self.apply(rt, transition);
+            }
+        }
+    }
+}
+
+impl<A: App> Runtime<A> {
+    fn redraw_ui(&mut self) {
+        if self.redraw.map_or(true, |h| h.strength() < RefreshHint::Ui.strength()) {
+            self.redraw = Some(RefreshHint::Ui);
+        }
+    }
+}
+
+/// 只渲染一帧 (不进入主循环), 用于主机预览与快照测试。`frame` 会先用主题背景清空。
+pub fn render_once<A: App>(
+    app: &mut A,
+    fonts: &mut FontStore,
+    glyphs: &mut GlyphCache,
+    hits: &mut Hits,
+    page: &mut dyn Page<A>,
+    frame: &mut Bitmap,
+) {
+    let tasks: Tasks<Delivery<A>> = Tasks::new(1, Waker::new().expect("waker"));
+    let mut redraw = None;
+    let mut swipe = None;
+    let mut clean = Vec::new();
+    let mut timers = Timers::default();
+    let alive = Alive::default();
+    let theme = app.theme();
+    frame.fill_rect(frame.bounds(), theme.background);
+    hits.clear();
+    let (width, height) = (frame.width(), frame.height());
+    let mut cx = Cx {
+        app,
+        fonts,
+        glyphs,
+        hits,
+        theme,
+        width,
+        height,
+        instance: 0,
+        tasks: &tasks,
+        alive: &alive,
+        redraw: &mut redraw,
+        swipe: &mut swipe,
+        clean: &mut clean,
+        timers: &mut timers,
+    };
+    page.render(&mut cx, frame);
+}
+
+static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 主循环的唤醒 eventfd (-1 = 没有)。信号处理函数往里写, 免得信号落在 STOP 检查之后、poll 之前时 poll 一睡就是一分钟。
+#[cfg(target_os = "linux")]
+static WAKE_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+#[cfg(unix)]
+extern "C" fn on_signal(_: libc::c_int) {
+    STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+    // 只用 async-signal-safe 的操作: 原子读 + write (不分配、不加锁); errno 原样恢复
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let fd = WAKE_FD.load(std::sync::atomic::Ordering::SeqCst);
+        if fd >= 0 {
+            let errno = *libc::__errno_location();
+            let one: u64 = 1;
+            libc::write(fd, &one as *const u64 as *const libc::c_void, 8);
+            *libc::__errno_location() = errno;
+        }
+    }
+}
+
+/// `run` 期间让信号处理函数能唤醒主循环; drop 时先撤掉 fd, 再关 eventfd。
+struct SignalWake;
+
+impl SignalWake {
+    fn install(waker: &Waker) -> Self {
+        #[cfg(target_os = "linux")]
+        WAKE_FD.store(waker.fd(), std::sync::atomic::Ordering::SeqCst);
+        let _ = waker;
+        SignalWake
+    }
+}
+
+impl Drop for SignalWake {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        WAKE_FD.store(-1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn install_signal_handlers() {
+    #[cfg(unix)]
+    unsafe {
+        let handler = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        libc::signal(libc::SIGTERM, handler);
+        libc::signal(libc::SIGINT, handler);
+    }
+}
+
+fn minute_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() / 60).unwrap_or(0)
+}
+
+fn ms_to_next_minute() -> u64 {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let into = (now.as_millis() % 60_000) as u64;
+    60_000 - into + 50
+}
+
+/// 等待事件; 返回 (输入就绪, 电源就绪, 唤醒就绪)。主机上 (非 unix) 简单睡眠。
+/// 启动画面还在屏幕上: 只收后台结果, 等首页 `ready` 或 `App::startup_hold` 到时 (输入留给主循环)。
+fn hold_startup<A: App>(rt: &mut Runtime<A>, stack: &mut Stack<A>, waker: &Waker) {
+    let hold = rt.app.startup_hold();
+    if hold.is_zero() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    while !stack.top().page.ready() {
+        let left = hold.saturating_sub(started.elapsed());
+        if left.is_zero() {
+            break;
+        }
+        if wait_waker(waker, left.as_millis() as u64 + 1) {
+            waker.drain();
+        }
+        let _ = stack.fire_timers(rt);
+        for delivery in rt.tasks.drain() {
+            stack.deliver(rt, delivery);
+        }
+    }
+    eprintln!("[startup] 启动画面上等首页 {} ms (ready={})", started.elapsed().as_millis(), stack.top().page.ready());
+}
+
+fn wait_waker(waker: &Waker, timeout_ms: u64) -> bool {
+    #[cfg(unix)]
+    {
+        let mut fd = libc::pollfd { fd: waker.fd(), events: libc::POLLIN, revents: 0 };
+        let rc = unsafe { libc::poll(&mut fd, 1, timeout_ms.min(i32::MAX as u64) as libc::c_int) };
+        rc > 0 && fd.revents != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = waker;
+        std::thread::sleep(Duration::from_millis(timeout_ms.min(20)));
+        true
+    }
+}
+
+fn wait(input: &InputReader, power: &PowerMonitor, waker: &Waker, timeout_ms: u64) -> (bool, bool, bool) {
+    #[cfg(unix)]
+    {
+        let mut fds: Vec<libc::pollfd> = Vec::new();
+        for fd in input.fds() {
+            fds.push(libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
+        }
+        let input_count = fds.len();
+        let power_fd = power.fd();
+        if let Some(fd) = power_fd {
+            fds.push(libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
+        }
+        let waker_fd = waker.fd();
+        let waker_index = fds.len();
+        if waker_fd >= 0 {
+            fds.push(libc::pollfd { fd: waker_fd, events: libc::POLLIN, revents: 0 });
+        }
+        let timeout = timeout_ms.min(i32::MAX as u64) as libc::c_int;
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
+        if rc <= 0 {
+            // 超时或 EINTR (信号)
+            return (false, false, false);
+        }
+        let input_ready = fds[..input_count].iter().any(|p| p.revents != 0);
+        let power_ready = power_fd.is_some() && fds[input_count].revents != 0;
+        let waker_ready = waker_fd >= 0 && fds[waker_index].revents != 0;
+        (input_ready, power_ready, waker_ready)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (input, power, waker);
+        std::thread::sleep(Duration::from_millis(timeout_ms.min(20)));
+        (true, true, true)
+    }
+}
+
+/// 主机上驱动页面的最小运行时 (预览与测试用): 处理导航、投递后台结果、跑空闲工作,
+/// 每次 `frame()` 渲染当前页。不涉及显示与输入设备。
+pub struct Headless<A: App> {
+    rt: Runtime<A>,
+    stack: Stack<A>,
+    waker: Waker,
+    last_frame: Option<Bitmap>,
+}
+
+impl<A: App> Headless<A> {
+    pub fn new(app: A, fonts: FontStore, width: u32, height: u32) -> std::io::Result<Self> {
+        let waker = Waker::new()?;
+        let mut rt = Runtime::new(app, fonts, (width, height), &waker);
+        let home = rt.app.home_page();
+        let entry = rt.new_entry(home);
+        let mut stack = Stack { entries: vec![entry] };
+        stack.enter_top(&mut rt, false);
+        let top = stack.top().instance;
+        A::on_start(&mut rt.cx(top));
+        Ok(Headless { rt, stack, waker, last_frame: None })
+    }
+
+    /// 导航到新页面 (等同当前页返回 Transition::Push)。
+    pub fn push(&mut self, page: Box<dyn Page<A>>) {
+        self.stack.apply(&mut self.rt, Transition::Push(page));
+    }
+
+    /// 把输入事件交给当前页; 返回 false 表示应用请求退出。
+    /// 先渲染一次当前页 (与设备上一致: 用户点的是屏幕上最新的画面, 命中区域随渲染登记)。
+    pub fn input(&mut self, event: &InputEvent) -> bool {
+        let (frame,_) = self.frame();
+        self.last_frame=Some(frame);
+        let top = self.stack.top();
+        let instance = top.instance;
+        let transition = top.page.on_input(&mut self.rt.cx(instance), event);
+        self.stack.apply(&mut self.rt, transition)
+    }
+
+    /// 等待后台任务并处理结果、空闲工作, 直到没有任何待办或超时。
+    pub fn settle(&mut self, timeout: Duration) {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let mut busy = self.stack.fire_timers(&mut self.rt);
+            for delivery in self.rt.tasks.drain() {
+                self.stack.deliver(&mut self.rt, delivery);
+                busy = true;
+            }
+            let top = self.stack.top();
+            let instance = top.instance;
+            if top.page.on_idle(&mut self.rt.cx(instance)) {
+                busy = true;
+            }
+            if std::time::Instant::now() >= deadline || (!busy && self.rt.tasks.idle()) {
+                break;
+            }
+            if !busy {
+                std::thread::sleep(Duration::from_millis(5));
+                self.waker.drain();
+            }
+        }
+    }
+
+    /// 渲染当前页到新帧, 返回 (帧, 待处理的重绘提示)。
+    pub fn frame(&mut self) -> (Bitmap, Option<RefreshHint>) {
+        let want=self.stack.top().page.wants_backdrop();
+        if want!=Backdrop::None {
+            let bg=if want==Backdrop::Screen {self.last_frame.clone()} else {
+                let n=self.stack.entries.len();
+                if n>=2 {
+                    let mut bg=Bitmap::new(self.rt.width,self.rt.height,self.rt.app.theme().background);
+                    let below=&mut self.stack.entries[n-2];
+                    below.page.render(&mut self.rt.cx(below.instance),&mut bg);
+                    Some(bg)
+                } else {None}
+            };
+            self.stack.top().page.set_backdrop(bg);
+        }
+        let top = self.stack.top();
+        self.rt.orient_for(&*top.page);
+        let mut frame = Bitmap::new(self.rt.width, self.rt.height, self.rt.app.theme().background);
+        self.rt.hits.clear();
+        let instance = top.instance;
+        top.page.render(&mut self.rt.cx(instance), &mut frame);
+        let mut hint = self.rt.redraw.take();
+        if let Some(rendered) = top.page.refresh_hint() {
+            if hint.is_none_or(|h| h.strength() < rendered.strength()) {
+                hint = Some(rendered);
+            }
+        }
+        self.rt.clean.clear();
+        top.page.presented();
+        (frame, hint)
+    }
+
+    pub fn app(&mut self) -> &mut A {
+        &mut self.rt.app
+    }
+
+    pub fn hits(&self) -> &Hits {
+        &self.rt.hits
+    }
+}
+
+/// 运行主循环直到 `Transition::Exit` 或收到 SIGTERM/SIGINT。
+///
+/// 循环每轮:
+/// 1. 计算超时 (见 lib.rs 文档), `poll` 输入/电源/唤醒 fd。
+/// 2. 电源事件: GoingToScreenSaver → app.on_suspend、释放输入 grab、`power.release_framework()`;
+///    OutOfScreenSaver → `power.reclaim_framework()`、grab、display.reinit、scheduler.invalidate、Flash 重绘、app.on_resume。
+///    休眠期间忽略输入、不刷新屏幕。
+/// 3. 输入事件: Down → 按下反馈 (反相 + A2, 只在 feedback 区域); 其它 → 当前页 on_input → 执行 Transition。
+/// 4. 投递后台结果。
+/// 5. 分钟变化 → app.on_minute。
+/// 6. 若有重绘请求: 页面 render 到后备缓冲, scheduler.plan → display.present → scheduler.commit。
+/// 7. 无事件且无手指按下时, 让当前页面做一次空闲工作。
+pub fn run<A: App>(
+    app: A,
+    mut display: Box<dyn Display>,
+    fonts: FontStore,
+    mut input: InputReader,
+    mut power: PowerMonitor,
+    mut scheduler: RefreshScheduler,
+) -> std::io::Result<()> {
+    install_signal_handlers();
+    let info = display.info().clone();
+    let waker = Waker::new()?;
+    let _signal_wake = SignalWake::install(&waker);
+    let mut rt = Runtime::new(app, fonts, (info.width, info.height), &waker);
+    // 启动时已倒拿 (main 按重力感应设好了显示与输入)
+    rt.upside_down = display.rotation().quarter_turns() == 2;
+    let mut applied = rt.rotation();
+    let home = rt.app.home_page();
+    let entry = rt.new_entry(home);
+    let mut stack = Stack { entries: vec![entry] };
+    stack.enter_top(&mut rt, false);
+    let top = stack.top().instance;
+    A::on_start(&mut rt.cx(top));
+    hold_startup(&mut rt, &mut stack, &waker);
+
+    let mut frame = Bitmap::new(rt.width, rt.height, rt.app.theme().background);
+    let mut events: Vec<InputEvent> = Vec::new();
+    let mut power_events: Vec<PowerEvent> = Vec::new();
+    let mut sleeping = false;
+    let mut last_minute = minute_now();
+    // 按下反馈是否已经画在屏幕上 (需要随后的正常重绘把它还原)
+    let mut feedback_shown = false;
+    // 上一帧的配色: 日间/夜间切换后几乎每个像素都反转, 局部刷新残影很重, 要闪刷一次
+    let mut last_theme = rt.app.theme();
+    scheduler.set_background(last_theme.background);
+    // 夜间模式交给驱动反色 (支持时), 驱动随之换用夜间波形
+    display.set_night(last_theme.night);
+    if !rt.app.startup_hold().is_zero() {
+        // 屏幕上是启动画面, 调度器以为是空白: 第一帧整屏写入并闪刷
+        scheduler.invalidate();
+        rt.redraw = Some(RefreshHint::Flash);
+    }
+    // 电源键按下时刻: 框架进程 (awesome 等) 被我们 SIGSTOP 时, powerd 进入屏保要向 winmgr 查询,
+    // 查询会一直挂到超时, 设备根本睡不下去 (KPW5 FW 5.17 实测)。所以一看到电源键按下就先 SIGCONT 框架,
+    // 让 powerd 的流程走完; 若 POWER_KEY_GRACE 内没进入屏保, 再暂停框架并重画。
+    let mut power_key_at: Option<std::time::Instant> = None;
+    let mut wants_idle = true;
+    // KN_DEBUG=1: 每帧打印渲染/差分/提交耗时 (设备上测翻页延迟)
+    let debug = std::env::var_os("KN_DEBUG").is_some();
+    let _ = input.grab();
+
+    loop {
+        if STOP.load(std::sync::atomic::Ordering::SeqCst) {
+            stack.leave_top(&mut rt);
+            break;
+        }
+
+        // 1. 等待
+        let mut timeout = ms_to_next_minute();
+        if let Some(ms) = rt.timers.next_ms() {
+            timeout = timeout.min(ms);
+        }
+        if let Some(deadline) = power.next_deadline_ms() {
+            timeout = timeout.min(deadline);
+        }
+        if let Some(at) = power_key_at {
+            timeout = timeout.min(POWER_KEY_GRACE.saturating_sub(at.elapsed()).as_millis() as u64);
+        }
+        if rt.redraw.is_some() || (wants_idle && !sleeping && !input.touch_active()) {
+            timeout = 0;
+        }
+        let (input_ready, _power_ready, waker_ready) = wait(&input, &power, &waker, timeout);
+        if waker_ready {
+            waker.drain();
+        }
+
+        // 2. 电源
+        power_events.clear();
+        power.poll_events(&mut power_events);
+        for event in power_events.drain(..) {
+            match event {
+                PowerEvent::GoingToScreenSaver if !sleeping => {
+                    sleeping = true;
+                    let top = stack.top();
+                    let instance = top.instance;
+                    top.page.on_suspend(&mut rt.cx(instance));
+                    rt.app.on_suspend();
+                    input.reset();
+                    let _ = input.ungrab();
+                    if let Some(mut page) = rt.app.sleep_screen() {
+                        // 框架还暂停着, 先画好屏保再交还 (唤醒后整屏重画)
+                        let started = std::time::Instant::now();
+                        if applied.swaps_axes() {
+                            // 横屏阅读中休眠: 屏保 (封面) 按竖屏画; 唤醒后的重绘再转回页面要的方向
+                            rt.orientation = Orientation::Portrait;
+                            (rt.width, rt.height) = rt.panel;
+                            applied = rt.rotation();
+                            display.set_rotation(applied);
+                            input.set_rotation(applied);
+                            frame = Bitmap::new(rt.width, rt.height, rt.app.theme().background);
+                            scheduler.resize(rt.width, rt.height);
+                        }
+                        frame.fill_rect(frame.bounds(), rt.app.theme().background);
+                        rt.hits.clear();
+                        page.render(&mut rt.cx(0), &mut frame);
+                        scheduler.invalidate();
+                        for req in scheduler.plan(&frame, RefreshHint::Flash) {
+                            let _ = display.present(&frame, &req);
+                        }
+                        scheduler.invalidate();
+                        eprintln!("[sleep] 屏保 {} ms", started.elapsed().as_millis());
+                    }
+                    // 系统界面 (屏保 / 唤醒后的锁屏) 不该被反色; 唤醒回来再开
+                    display.set_night(false);
+                    power.release_framework();
+                }
+                PowerEvent::OutOfScreenSaver if sleeping => {
+                    sleeping = false;
+                    power_key_at = None;
+                    power.reclaim_framework();
+                    // 给系统一点时间恢复背光/电源, 与 Python 版一致
+                    std::thread::sleep(Duration::from_millis(350));
+                    input.reset();
+                    let _ = input.grab();
+                    let _ = display.reinit();
+                    display.set_night(rt.app.theme().night);
+                    scheduler.invalidate();
+                    rt.app.on_resume();
+                    let entry = stack.top();
+                    entry.page.on_resume(&mut rt.cx(entry.instance));
+                    // 应用唤醒后要盖的页面 (例如锁屏) 在第一帧之前压栈, 原页面不会先露出来
+                    let top = stack.top().page.id();
+                    match rt.app.take_transition(top) {
+                        Transition::None | Transition::Exit => {}
+                        transition => {
+                            stack.apply(&mut rt, transition);
+                        }
+                    }
+                    rt.redraw = Some(RefreshHint::Flash);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(at) = power_key_at {
+            if sleeping {
+                // 已进入屏保, 后续由 OutOfScreenSaver 接管
+                power_key_at = None;
+            } else if at.elapsed() >= POWER_KEY_GRACE {
+                // 这次按键没有引起休眠: 重新暂停框架, 框架运行期间可能改写过屏幕, 整屏重画
+                power_key_at = None;
+                power.reclaim_framework();
+                let _ = display.reinit();
+                scheduler.invalidate();
+                rt.redraw = Some(RefreshHint::Flash);
+            }
+        }
+
+        // 3. 输入
+        if input_ready {
+            events.clear();
+            let _ = input.read(&mut events);
+            if sleeping {
+                events.clear();
+            }
+            for event in events.drain(..) {
+                if debug {
+                    eprintln!("[input] {:?}", event);
+                }
+                // 有人在用: 重置系统的屏幕超时 (见 PowerMonitor::user_activity)
+                power.user_activity();
+                if let InputEvent::Key { code: KeyCode::Power, pressed: true } = event {
+                    if !sleeping && power_key_at.is_none() {
+                        power.release_framework();
+                        power_key_at = Some(std::time::Instant::now());
+                    }
+                    continue;
+                }
+                if let InputEvent::Rotation { upside_down: ud } = event {
+                    // KOReader 的 rotation_map: 倒拿时画面翻转 180°, 触摸镜像, 翻页键互换 (重绘前生效)
+                    if rt.upside_down != ud {
+                        rt.upside_down = ud;
+                        rt.redraw = Some(RefreshHint::Flash);
+                    }
+                    continue;
+                }
+                if let InputEvent::Key { code: KeyCode::Home, pressed: true } = event {
+                    // Kindle Touch 的实体 Home 键 (KOReader: 回主页)
+                    if !stack.apply(&mut rt, Transition::Home) {
+                        return Ok(());
+                    }
+                    wants_idle = true;
+                    continue;
+                }
+                if let InputEvent::Gesture(g) = &event {
+                    if g.kind == GestureKind::Down {
+                        let p = Point { x: g.start.0, y: g.start.1 };
+                        if let Some((rect, radius)) = rt.hits.feedback_shape_at(p) {
+                            // 只在调度器的屏幕副本上反相这一块并只刷这一块 (不拷整屏、不做整屏差分)
+                            if let Some(req) = scheduler.press(rect, radius) {
+                                if display.present(scheduler.screen(), &req).is_err() {
+                                    // 副本已经反相了, 屏幕上不一定: 下一次整屏刷新
+                                    scheduler.invalidate();
+                                }
+                                feedback_shown = true;
+                            }
+                        }
+                    }
+                }
+                let top = stack.top();
+                let instance = top.instance;
+                let transition = top.page.on_input(&mut rt.cx(instance), &event);
+                if !stack.apply(&mut rt, transition) {
+                    return Ok(());
+                }
+                if let InputEvent::Gesture(g) = &event {
+                    if g.kind != GestureKind::Down && feedback_shown {
+                        // 抬起后无论页面是否变化都要重绘一次, 把反相还原
+                        rt.redraw_ui();
+                        feedback_shown = false;
+                    }
+                }
+                wants_idle = true;
+            }
+        }
+
+        // 4. 定时器与后台结果
+        if !sleeping && stack.fire_timers(&mut rt) {
+            wants_idle = true;
+        }
+        for delivery in rt.tasks.drain() {
+            stack.deliver(&mut rt, delivery);
+            wants_idle = true;
+        }
+
+        // 5. 时钟
+        let minute = minute_now();
+        if minute != last_minute {
+            last_minute = minute;
+            if !sleeping && rt.app.on_minute() {
+                rt.redraw_ui();
+            }
+        }
+
+        // 6. 重绘
+        if let Some(mut hint) = rt.redraw.take() {
+            if !sleeping {
+                let theme = rt.app.theme();
+                scheduler.set_ui_mode(rt.app.ui_refresh_mode());
+                scheduler.set_background(theme.background);
+                if theme != last_theme {
+                    last_theme = theme;
+                    display.set_night(theme.night);
+                    hint = RefreshHint::Flash;
+                }
+                // 方向变了 (进入/离开横屏阅读页、阅读页里切换、倒拿): 显示与触摸跟着转, 整屏重画
+                rt.orient_for(&*stack.top().page);
+                let rotation = rt.rotation();
+                if rotation != applied {
+                    applied = rotation;
+                    display.set_rotation(rotation);
+                    input.set_rotation(rotation);
+                    if (frame.width(), frame.height()) != (rt.width, rt.height) {
+                        frame = Bitmap::new(rt.width, rt.height, rt.app.theme().background);
+                        scheduler.resize(rt.width, rt.height);
+                    }
+                    scheduler.invalidate();
+                    hint = RefreshHint::Flash;
+                    rt.swipe = None;
+                    feedback_shown = false;
+                }
+                // 弹窗式页面: 先取背景。屏幕上的画面读回后当作 "已显示" 的内容, 只刷新弹窗那块 (不闪)
+                let want = stack.top().page.wants_backdrop();
+                if want != Backdrop::None {
+                    let mut bg = Bitmap::new(rt.width, rt.height, rt.app.theme().background);
+                    let got = match want {
+                        Backdrop::Screen => {
+                            let ok = display.read_back(&mut bg);
+                            if ok {
+                                scheduler.adopt(&bg);
+                                if hint == RefreshHint::Flash {
+                                    hint = RefreshHint::Ui;
+                                }
+                            }
+                            ok
+                        }
+                        _ => {
+                            let n = stack.entries.len();
+                            if n >= 2 {
+                                let below = &mut stack.entries[n - 2];
+                                let instance = below.instance;
+                                below.page.render(&mut rt.cx(instance), &mut bg);
+                                rt.hits.clear();
+                            }
+                            n >= 2
+                        }
+                    };
+                    stack.top().page.set_backdrop(got.then_some(bg));
+                }
+                let started = std::time::Instant::now();
+                let top = stack.top();
+                if !top.page.opaque() {
+                    frame.fill_rect(frame.bounds(), rt.app.theme().background);
+                }
+                rt.hits.clear();
+                let instance = top.instance;
+                top.page.render(&mut rt.cx(instance), &mut frame);
+                if let Some(rendered) = top.page.refresh_hint() {
+                    if rendered.strength() > hint.strength() {
+                        hint = rendered;
+                    }
+                }
+                let rendered = started.elapsed();
+                let swipe = rt.swipe.take();
+                let clean = std::mem::take(&mut rt.clean);
+                let mut plan = scheduler.plan_with_clean(&frame, hint, &clean);
+                if let [req] = plan.as_mut_slice() {
+                    // 上层传递方向, 清理与动画的互斥统一由显示层执行。
+                    if display.info().supports_swipe && ((hint == RefreshHint::Turn && !req.flash) || (hint == RefreshHint::Flash && req.flash)) {
+                        req.swipe = swipe;
+                    }
+                }
+                let planned = started.elapsed();
+                let mut submitted = !plan.is_empty();
+                for req in &plan {
+                    match display.present(&frame, req) {
+                        Ok(_) => scheduler.commit(&frame, req, hint),
+                        Err(_) => {
+                            submitted = false;
+                            scheduler.invalidate();
+                            break;
+                        }
+                    }
+                }
+                if submitted {
+                    top.page.presented();
+                }
+                if debug {
+                    eprintln!(
+                        "[frame] {:?} render {:.1} ms, plan {:.1} ms, present {:.1} ms, {:?}",
+                        hint,
+                        rendered.as_secs_f32() * 1e3,
+                        (planned - rendered).as_secs_f32() * 1e3,
+                        (started.elapsed() - planned).as_secs_f32() * 1e3,
+                        plan.iter().map(|r| (r.rect, r.waveform, r.flash, r.swipe)).collect::<Vec<_>>()
+                    );
+                }
+                wants_idle = true;
+            }
+            continue;
+        }
+
+        // 7. 空闲工作
+        if wants_idle && !sleeping && !input.touch_active() {
+            let top = stack.top();
+            let instance = top.instance;
+            wants_idle = top.page.on_idle(&mut rt.cx(instance));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    #[derive(Default)]
+    struct TestApp {
+        /// 页面收到的消息 ("页面名:消息")
+        log: Vec<String>,
+        night: bool,
+        ui_mode: UiRefreshMode,
+    }
+
+    impl App for TestApp {
+        fn home_page(&mut self) -> Box<dyn Page<Self>> {
+            Box::new(TestPage::new("home", |_| {}))
+        }
+        fn theme(&self) -> Theme {
+            Theme::new(self.night)
+        }
+        fn ui_refresh_mode(&self) -> UiRefreshMode {
+            self.ui_mode
+        }
+    }
+
+    type Setup = Box<dyn FnOnce(&Cx<TestApp>)>;
+
+    struct TestPage {
+        name: &'static str,
+        setup: Option<Setup>,
+    }
+
+    impl TestPage {
+        fn new(name: &'static str, setup: impl FnOnce(&Cx<TestApp>) + 'static) -> Self {
+            TestPage { name, setup: Some(Box::new(setup)) }
+        }
+    }
+
+    impl Page<TestApp> for TestPage {
+        fn id(&self) -> PageId {
+            PageId(0)
+        }
+        fn enter(&mut self, cx: &mut Cx<TestApp>, _returning: bool) {
+            if let Some(setup) = self.setup.take() {
+                setup(cx);
+            }
+        }
+        fn render(&mut self, _cx: &mut Cx<TestApp>, _frame: &mut Bitmap) {}
+        fn on_input(&mut self, _cx: &mut Cx<TestApp>, _event: &InputEvent) -> Transition<TestApp> {
+            Transition::None
+        }
+        fn on_message(&mut self, cx: &mut Cx<TestApp>, msg: Box<dyn Any + Send>) {
+            if let Ok(s) = msg.downcast::<&'static str>() {
+                cx.app.log.push(format!("{}:{}", self.name, s));
+            }
+        }
+    }
+
+    /// 卡住的任务 (模拟卡在网络读上): 每 `release` 一次放走一个。
+    fn gate() -> (mpsc::Sender<()>, Arc<Mutex<mpsc::Receiver<()>>>) {
+        let (tx, rx) = mpsc::channel();
+        (tx, Arc::new(Mutex::new(rx)))
+    }
+
+    fn block(rx: &Arc<Mutex<mpsc::Receiver<()>>>) -> impl FnOnce() -> &'static str + Send + 'static {
+        let rx = Arc::clone(rx);
+        move || {
+            let _ = rx.lock().unwrap().recv_timeout(Duration::from_secs(10));
+            "stuck"
+        }
+    }
+
+    fn headless() -> Headless<TestApp> {
+        Headless::new(TestApp::default(), FontStore::new(), 100, 100).unwrap()
+    }
+
+    #[test]
+    fn ordinary_navigation_does_not_flash_in_either_theme() {
+        for night in [false, true] {
+            let mut h = headless();
+            h.rt.app.night = night;
+            h.rt.redraw = None;
+            h.push(Box::new(TestPage::new("detail", |_| {})));
+            assert_eq!(h.rt.redraw.take(), Some(RefreshHint::Ui));
+            h.stack.apply(&mut h.rt, Transition::Back);
+            assert_eq!(h.rt.redraw.take(), Some(RefreshHint::Ui));
+            h.rt.app.ui_mode = UiRefreshMode::Classic;
+            h.push(Box::new(TestPage::new("classic", |_| {})));
+            assert_eq!(h.rt.redraw.take(), Some(if night { RefreshHint::Flash } else { RefreshHint::Ui }));
+            let instance = h.stack.top().instance;
+            h.rt.cx(instance).request_ui_redraw(RefreshHint::Clean);
+            assert_eq!(h.rt.redraw.take(), Some(RefreshHint::Clean));
+            h.rt.app.ui_mode = UiRefreshMode::Smooth;
+            h.rt.cx(instance).request_ui_redraw(RefreshHint::Clean);
+            assert_eq!(h.rt.redraw.take(), Some(RefreshHint::Ui));
+        }
+    }
+
+    #[test]
+    fn stuck_net_jobs_do_not_block_local_work() {
+        let mut h = headless();
+        let (release, rx) = gate();
+        h.push(Box::new(TestPage::new("p", move |cx| {
+            for _ in 0..NET_WORKERS + 1 {
+                cx.spawn(block(&rx));
+            }
+            cx.spawn_local(|| "local");
+        })));
+        h.settle(Duration::from_millis(300));
+        assert_eq!(h.app().log, vec!["p:local".to_string()]);
+        for _ in 0..NET_WORKERS + 1 {
+            release.send(()).unwrap();
+        }
+        h.settle(Duration::from_secs(5));
+        assert_eq!(h.app().log.iter().filter(|s| *s == "p:stuck").count(), NET_WORKERS + 1);
+    }
+
+    #[test]
+    fn droppable_jobs_of_gone_pages_are_skipped() {
+        let mut h = headless();
+        let (release, rx) = gate();
+        let ran_keep = Arc::new(AtomicBool::new(false));
+        let ran_drop = Arc::new(AtomicBool::new(false));
+        let ran_local_drop = Arc::new(AtomicBool::new(false));
+        let (keep, drop_, local_drop) = (Arc::clone(&ran_keep), Arc::clone(&ran_drop), Arc::clone(&ran_local_drop));
+        h.push(Box::new(TestPage::new("p", move |cx| {
+            // 两条队列都占满, 下面的任务只能排队
+            for _ in 0..NET_WORKERS {
+                cx.spawn(block(&rx));
+            }
+            cx.spawn_local(block(&rx));
+            cx.spawn_droppable(move || {
+                drop_.store(true, Ordering::SeqCst);
+                "drop"
+            });
+            cx.spawn_local_droppable(move || {
+                local_drop.store(true, Ordering::SeqCst);
+                "local-drop"
+            });
+            // 有副作用的任务 (进度上传之类): 页面走了也要执行
+            cx.spawn(move || {
+                keep.store(true, Ordering::SeqCst);
+                "keep"
+            });
+        })));
+        // 离开页面 (实例出栈), 再放行
+        h.stack.apply(&mut h.rt, Transition::Back);
+        for _ in 0..NET_WORKERS + 1 {
+            release.send(()).unwrap();
+        }
+        h.settle(Duration::from_secs(5));
+        assert!(h.rt.tasks.idle());
+        assert!(ran_keep.load(Ordering::SeqCst));
+        assert!(!ran_drop.load(Ordering::SeqCst));
+        assert!(!ran_local_drop.load(Ordering::SeqCst));
+        // 出栈页面的结果照旧丢弃
+        assert!(h.app().log.is_empty(), "{:?}", h.app().log);
+    }
+
+    #[test]
+    fn droppable_jobs_run_while_page_is_below_top() {
+        let mut h = headless();
+        let (release, rx) = gate();
+        h.push(Box::new(TestPage::new("p", move |cx| {
+            for _ in 0..NET_WORKERS {
+                cx.spawn(block(&rx));
+            }
+            cx.spawn_droppable(|| "drop");
+        })));
+        // 压一层新页面: p 还在栈里, 任务照常执行并送回 p
+        h.push(Box::new(TestPage::new("q", |_| {})));
+        for _ in 0..NET_WORKERS {
+            release.send(()).unwrap();
+        }
+        h.settle(Duration::from_secs(5));
+        assert!(h.app().log.contains(&"p:drop".to_string()), "{:?}", h.app().log);
+    }
+
+    #[test]
+    fn spawner_routes_follow_up_jobs_to_the_page() {
+        let mut h = headless();
+        h.push(Box::new(TestPage::new("p", |cx| {
+            let next = cx.spawner().unwrap();
+            // 本地读缓存未命中 → 交给网络队列
+            cx.spawn_local(move || {
+                next.spawn(|| "downloaded");
+                "miss"
+            });
+        })));
+        h.settle(Duration::from_secs(5));
+        let mut log = h.app().log.clone();
+        log.sort();
+        assert_eq!(log, vec!["p:downloaded".to_string(), "p:miss".to_string()]);
+    }
+}

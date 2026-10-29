@@ -1,0 +1,45 @@
+api_base_url = "https://n.novelia.cc"
+auth_base_url = "https://auth.novelia.cc"
+forum_base_url = "https://forum.novelia.cc" # 仅用于书籍评论
+timeout_secs = 30
+strict_tls = true
+offline = false
+font_size = 48
+line_spacing = 1.42
+paragraph_spacing = 0.22
+first_line_indent = false
+margin = 34
+translation = "auto" # auto, sakura, gpt, youdao, baidu
+show_original = false
+show_translation = true
+reader_font = "" # fonts 目录中的文件名；空为系统默认
+landscape = false
+night = false
+welcome_skipped = false
+# 兼容旧版配置的回退字体列表，相对 /mnt/us/extensions/kindlia/。
+font_paths = []
+
+# 显示 / 阅读增强
+page_turn_animation = true # 仅支持原生动画的设备生效
+swipe_steps = 12 # 动画阶数 6..60
+full_refresh_every = 6 # 清理间隔，2..12 屏，重启后生效
+prefetch_chapters = false # 相邻网络章节预加载到缓存
+original_size = 85 # 参考日语字号相对正文百分比，60..120
+original_gray = 80 # 0 最深，200 最浅
+
+# 可选 Cloudflare Worker 反代；默认直连。自行填写地址和密钥后开启。
+gateway_enabled = false
+gateway_url = "" # 例如 https://reader.example.com
+gateway_key = "" # 与 Worker secret GATEWAY_TOKEN 一致，勿分享
+
+# 与 KinNovel 对齐的显示与阅读项
+ui_refresh_mode = "smooth" # smooth 流畅 / classic 经典
+page_flash = false # 每次翻页全屏刷新，重启生效
+landscape_side = "left" # left / right
+sleep_cover = false # 休眠显示当前书封面，重启生效
+operation_tips = true
+ignore_japanese = false # 网文列表隐藏无译文章节的书籍
+ignore_ai = false # 网文列表隐藏只有 GPT/Sakura 译文的书籍
+cache_limit_mb = 192 # 启动时清理网络/公共缓存；已下载文库由存储页手动清理
+convert = "" # 关闭 / t2s 繁转简 / s2t 简转繁
+lock_pin = "" # 由设置页保存带盐摘要，请勿填写账号密码

@@ -1,0 +1,13 @@
+{
+  "name": "kindlia-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --ip 127.0.0.1",
+    "check": "node --check src/index.js && node --test",
+    "build": "wrangler deploy --dry-run --outdir ../../build/worker",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": { "wrangler": "4.152.0" }
+}

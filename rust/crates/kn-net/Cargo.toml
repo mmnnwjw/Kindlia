@@ -1,0 +1,13 @@
+[package]
+name = "kn-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# 复用 KinNovel 的 ring TLS 与纯 Rust gzip，移除 SignalR/WebSocket 依赖。
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "0.26"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]

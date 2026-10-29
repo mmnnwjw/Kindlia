@@ -1,0 +1,33 @@
+/references/
+/AGENTS.md
+/Kindlia方案.md
+# Internal performance, device validation, migration and release records stay local.
+/docs/PERFORMANCE*.md
+/docs/DEVICE-TEST*.md
+/docs/*MIGRATION*.md
+/docs/RELEASE*.md
+/rust/target/
+/build/
+/dist/
+/local-data/
+*.pgm
+
+# Generated Python artifacts
+__pycache__/
+*.py[cod]
+
+# Device configuration, credentials and user data
+/config.toml
+/data/
+/cache/
+/fonts/
+/books/
+/logs/
+/backups/
+/diagnostics/
+/.updates/
+/session*.json
+/gateway-secret.json
+.env
+.env.*
+!.env.example
