@@ -41,4 +41,9 @@ with zipfile.ZipFile(args.output, 'w', zipfile.ZIP_DEFLATED) as out:
         (root / 'rust/third_party/libwebp/PATENTS', 'kindlia/licenses/libwebp-PATENTS'),
     ]:
         out.write(source, target)
+    # Keep the illustrated setup guide readable in an extracted release package.
+    for source in sorted((root / 'docs/images/gateway').iterdir()):
+        if source.suffix.lower() not in ('.jpg', '.png'):
+            continue
+        out.write(source, 'kindlia/docs/images/gateway/' + source.name)
 print(args.output.resolve())
