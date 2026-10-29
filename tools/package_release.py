@@ -7,7 +7,7 @@ import struct
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--binary', type=Path, default=root / 'rust/target/armv7-unknown-linux-musleabihf/release/kindlia')
-parser.add_argument('--output', type=Path, default=root / 'dist/kindlia-0.2.7.zip')
+parser.add_argument('--output', type=Path, default=root / 'dist/kindlia-1.0.0.zip')
 args = parser.parse_args()
 launcher = (root / 'bin/kindlia.sh').read_bytes()
 if b'\r' in launcher:

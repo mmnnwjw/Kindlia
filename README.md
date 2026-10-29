@@ -2,7 +2,7 @@
 
 Novelia（轻小说机翻机器人）Kindle 原生客户端，基于 [KinNovel](https://github.com/mmnnwjw/KinNovel) 的 Rust 墨水屏技术栈构建。
 
-[![Version](https://img.shields.io/badge/version-0.2.7-blue.svg)](https://github.com/mmnnwjw/Kindlia)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/mmnnwjw/Kindlia)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Kindle%20(ARMv7%20Linux)-orange.svg)]()
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-lightgrey.svg)]()
@@ -68,7 +68,7 @@ Kindlia 与 KinNovel 互相独立运行，两者配置与数据目录彼此隔�
 
 ### 安装
 
-1. 前往项目的 [Releases 页面](https://github.com/mmnnwjw/Kindlia/releases) 下载最新的发布包（例如 `kindlia-0.2.7.zip`）。
+1. 前往项目的 [Releases 页面](https://github.com/mmnnwjw/Kindlia/releases) 下载最新的发布包（例如 `kindlia-1.0.0.zip`）。
 2. 将 Kindle 连接至电脑，解压压缩包，将内部的 `kindlia` 文件夹完整拷贝至 Kindle 盘符的 **`extensions/`** 目录：
    ```text
    /mnt/us/extensions/kindlia/
@@ -181,7 +181,7 @@ gateway_key = ""                            # 与 Worker 部署一致的私密�
 cd ..
 python tools/package_release.py
 ```
-执行后将在 `dist/` 目录下生成 `kindlia-0.2.7.zip`，可直接部署至设备。
+执行后将在 `dist/` 目录下生成 `kindlia-1.0.0.zip`，可直接部署至设备。
 
 ---
 

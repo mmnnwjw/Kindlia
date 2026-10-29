@@ -18,7 +18,7 @@ p.add_argument('--host', required=True)
 p.add_argument('--port', type=int, default=2222)
 p.add_argument('--source-address', help='Optional local interface address for direct LAN access')
 p.add_argument('--fingerprint', required=True)
-p.add_argument('--package', type=Path, default=root / 'dist/kindlia-0.2.7.zip')
+p.add_argument('--package', type=Path, default=root / 'dist/kindlia-1.0.0.zip')
 p.add_argument('--clean', action='store_true', help='仅在用户明确要求清洁安装时使用')
 args = p.parse_args()
 token = uuid.uuid4().hex[:10]
