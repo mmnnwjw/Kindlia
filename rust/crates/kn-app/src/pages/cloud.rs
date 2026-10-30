@@ -414,10 +414,26 @@ pub fn open_volume(
         )
     };
     eprintln!("[wenku] download novel={novel} volume={volume} human={human}");
-    let bytes = repo.api.download(&path).map_err(|e| {
-        eprintln!("[wenku] download failed: {e}");
-        format!("文库下载：{e}")
-    })?;
+    let mut attempt = 0;
+    let bytes = loop {
+        let bytes = repo.api.download(&path).map_err(|e| {
+            eprintln!("[wenku] download failed: {e}");
+            format!("文库下载：{e}")
+        })?;
+        if let Some(error) = crate::epub::incomplete_download(&bytes) {
+            eprintln!("[wenku] incomplete ZIP ({} bytes), attempt {}: {error}", bytes.len(), attempt + 1);
+            if attempt == 2 {
+                return Err(format!("文库下载文件不完整，重试后仍无效：{error}"));
+            }
+            // Start again at the generation endpoint, not the redirected file
+            // URL: its previous HTTP body may have ended while still growing.
+            drop(bytes);
+            std::thread::sleep(std::time::Duration::from_secs(1 << attempt));
+            attempt += 1;
+            continue;
+        }
+        break bytes;
+    };
     eprintln!("[wenku] downloaded {} bytes; parsing EPUB", bytes.len());
     let key = crate::epub::import(&repo.store, &identity, &bytes, volume).map_err(|e| {
         eprintln!("[wenku] import failed: {e}");

@@ -7,7 +7,7 @@ use crate::{
     store::Progress,
     Kindlia,
 };
-use kn_platform::{GestureKind, InputEvent, LightProp};
+use kn_platform::{GestureKind, InputEvent, KeyCode, LightProp};
 use kn_render::{Bitmap, FontId, Rect, Synth, TextStyle};
 use kn_text::{Block, FontMeasure, LayoutParams, PageItem, Paginator, WidthCache};
 use kn_text::{Inline, RichLine};
@@ -1483,6 +1483,17 @@ impl Page<Kindlia> for ReaderPage {
         self.paginator.is_some()
     }
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, event: &InputEvent) -> Transition<Kindlia> {
+        if let InputEvent::Key { code, pressed: true } = event {
+            let forward = match code {
+                KeyCode::PageForward => Some(true),
+                KeyCode::PageBack => Some(false),
+                _ => None,
+            };
+            if let Some(forward) = forward {
+                self.turn(cx, forward);
+                return Transition::None;
+            }
+        }
         if self.menu || (self.chapter.is_none() && !self.loading) {
             if let InputEvent::Gesture(g) = event {
                 if g.kind == GestureKind::Long

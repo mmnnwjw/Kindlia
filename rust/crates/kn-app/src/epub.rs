@@ -209,6 +209,21 @@ pub fn index(store: &Store, key: &NovelKey) -> Result<Book, String> {
 fn metadata_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+/// Check the ZIP directory before publishing a download. TXT/HTML and unsupported
+/// archive formats are left to import: only a broken ZIP merits another request.
+pub(crate) fn incomplete_download(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return Some("下载文件为空".into());
+    }
+    if !bytes.starts_with(b"PK\x03\x04") {
+        return None;
+    }
+    match zip::ZipArchive::new(std::io::Cursor::new(bytes)) {
+        Err(e @ zip::result::ZipError::InvalidArchive(_))
+        | Err(e @ zip::result::ZipError::Io(_)) => Some(e.to_string()),
+        _ => None,
+    }
+}
 pub fn import(
     store: &Store,
     identity: &impl Serialize,
@@ -401,7 +416,13 @@ fn document_from(
         }
     }
     if target.is_some() && !found {
-        return Err("EPUB 目录锚点无法定位".into());
+        // Generated translations can discard the original paragraph id. Keep
+        // the requested anchor on the first block so the reader resolves it
+        // immediately instead of paginating the whole document looking for it.
+        if let Some(first) = doc.blocks.first_mut() {
+            first.path = format!("/epub-anchor/{}", target.as_ref().unwrap());
+        }
+        eprintln!("[epub] missing TOC anchor; using document start: {id}");
     }
     Ok(doc)
 }
