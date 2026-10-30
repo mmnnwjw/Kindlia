@@ -1,10 +1,12 @@
+<div align="center">
+
 # Kindlia
 
 Novelia（轻小说机翻机器人）Kindle 原生客户端，基于 [KinNovel](https://github.com/mmnnwjw/KinNovel) 的 Rust 墨水屏技术栈构建。
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/mmnnwjw/Kindlia)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Kindle%20(ARMv7%20Linux)-orange.svg)]()
+[![Platform](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Kindle%20%2B%20KUAL-informational)]()
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-lightgrey.svg)]()
 
 <p align="center">
@@ -14,9 +16,9 @@ Novelia（轻小说机翻机器人）Kindle 原生客户端，基于 [KinNovel](
   <img src="docs/images/stats.png" width="23%" alt="阅读统计：阅读时长、页数与书籍排行">
 </p>
 
-以上为 KPW5 实机（固件 5.17.1）的实际运行截图，依次展示书架、阅读器、阅读菜单与阅读统计。演示书籍为[《极地恋爱》](https://n.novelia.cc/novel/syosetu/n1896br)，正文选用随机章节「第九话　曲折妖精」，阅读字体为[霞鹜新致宋·屏幕阅读版（补全）](https://github.com/lxgw/LxgwNeoXiZhi-Screen/releases/tag/26.08.21)。统计通过实际打开书籍、停留与翻页积累。
-
 [功能特性](#功能特性) • [安装与部署](#安装与使用) • [配置说明](#配置与个性化) • [反代网关](#可选-cloudflare-worker-反代) • [编译打包](#编译与打包) • [许可与说明](#开源许可与说明)
+
+</div>
 
 ---
 
