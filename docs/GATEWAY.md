@@ -1,362 +1,389 @@
-# Cloudflare 反代图文教程：没有自己的域名也能搭建
+﻿# Cloudflare 反代搭建教程
 
-这篇教程从注册 Cloudflare 开始，直到在 Kindlia 中打开在线小说。使用 Cloudflare 自动分配的 `workers.dev` 地址，**不用购买域名，不用修改 DNS，也不用租服务器**。
+这篇教程面向零基础新手，从注册 Cloudflare 与免费域名开始，一步步搭建属于你自己的专属小说加速通道。
 
-Kindlia 默认直连。只有你填写自己的反代地址、密钥并打开开关后，才会经过 Worker。教程中的地址均为格式示例；截图中的演示地址也请换成控制台分配给你自己的地址。
+全程 **0 成本**、**无需购买域名**、**无需租用服务器**、**无需备案**，跟着图文点击即可轻松复现。
 
-> `workers.dev` 在部分中国大陆网络可能无法连接。部署成功不代表 Kindle 所在网络一定可达；请先完成第六步的连通检查。若电脑能访问、Kindle 不能访问，需要更换可达入口或网络，不能靠修改密钥解决。本文先不涉及自定义域名。
+---
 
-## 先看整个过程
+## 先看整个搭建流程
 
 ```text
-注册 Cloudflare → 验证邮箱 → 创建免费 Worker
-                         ↓
-                设置访问密钥和图片白名单
-                         ↓
-                发布 Kindlia 网关代码
-                         ↓
-                打开 /health 检查入口
-                         ↓
-          填写 Kindle 配置 → 重启应用 → 在线阅读
+注册 Cloudflare 账号 → 获取 DigitalPlat 免费域名 (如 .dpdns.org)
+                             ↓
+             将免费域名委派托管到 Cloudflare (修改名称服务器)
+                             ↓
+             创建免费 Worker 并发布 Kindlia 网关源码
+                             ↓
+             配置访问密钥 (GATEWAY_TOKEN) 与图片白名单 (IMAGE_HOSTS)
+                             ↓
+             为 Worker 绑定免费自定义域名 (彻底绕开 workers.dev 污染)
+                             ↓
+             在浏览器打开 /health 检查专属网关状态
+                             ↓
+    填写 Kindle 客户端配置 (config.toml) → 重启应用 → 畅快阅读在线小说
 ```
 
-准备一台能访问 Cloudflare 和 GitHub 的电脑、一个能收信的邮箱，以及已安装 Kindlia 的 Kindle。网页编辑器可用时，只需浏览器；如果编辑器一直空白，第五步还提供官方 Wrangler 工具的备用发布方法，需要安装 Node.js。
+---
 
-你会接触到三种不同的密码或密钥，不要混用：
+## 账号与密钥速查表（清晰区分，避免混淆）
 
-| 名称 | 用途 | 填在哪里 |
+在配置过程中，你会接触到几种不同的账号、密码与口令，它们各司其职，请对照下表：
+
+| 名称 | 用途 | 获取途径 / 填在哪里 |
 | --- | --- | --- |
-| Cloudflare 登录密码 | 管理自己的 Cloudflare 账号 | Cloudflare 登录页 |
-| 自己生成的网关密钥 | 防止其他人使用你的反代 | Worker 的 `GATEWAY_TOKEN`，以及 Kindle 的 `gateway_key`；两边完全相同 |
-| Novelia 源站账号密码 | 登录小说网站，使用收藏和历史等功能 | Kindlia 的源站登录页 |
+| **Cloudflare 账号** | 管理 DNS 解析、部署 Worker 脚本与配置自定义域 | [Cloudflare 官网](https://dash.cloudflare.com/sign-up) 注册 |
+| **DigitalPlat 账号** | 申请并持有免费域名（如 `.dpdns.org`），配置 DNS 委派 | [DigitalPlat 官网](https://digitalplat.org) 注册并用 GitHub 验证 |
+| **自己生成的网关密钥** | 保护你的反代网关，防止外部陌生人蹭用消耗额度 | Worker 的 `GATEWAY_TOKEN`，以及 Kindle 的 `gateway_key`（两处必须完全一致） |
+| **Novelia 源站账号** | 登录小说网站，同步收藏书架与历史进度（非必须） | 仅在 Kindlia 客户端内的源站登录页输入（切勿填进 Cloudflare！） |
 
-网关密钥由你自己生成，**不需要创建 Cloudflare API Token，也不要把 Cloudflare 登录密码填进 Kindle**。
+---
 
-## 一、注册 Cloudflare 并验证邮箱
+> [!CAUTION]
+> 建议全程在Chrome浏览器无痕式窗口内完成以免遇到问题
 
-1. 在电脑浏览器打开 [Cloudflare 官方注册页](https://dash.cloudflare.com/sign-up)。已有账号可直接登录。
-2. 填写自己的邮箱和登录密码，按照页面提示完成人机验证，阅读并接受相应协议后点击 **注册 / Sign up**。
-3. 打开邮箱，找到 Cloudflare 发来的验证邮件，点击其中的验证链接。收不到时，先检查垃圾邮件，再回控制台使用 **重新发送验证邮件 / Resend verification email**。
-4. 回到 Cloudflare 控制台。如果仍弹出 **Verify your account**，说明邮箱验证尚未完成，先不要继续创建 Worker。
+## 一、注册 Cloudflare 账号并验证邮箱
 
-![Cloudflare 注册页：填写自己的邮箱与密码](images/gateway/01-cloudflare-signup.jpg)
+1. 在电脑浏览器打开 [Cloudflare 官方注册页](https://dash.cloudflare.com/sign-up)。已有账号直接登录即可。
+2. 填写常用邮箱和密码，完成人机验证后点击 **注册 / Sign up**。
+3. 登录你的注册邮箱，查收 Cloudflare 发来的验证邮件，点击其中的激活链接完成邮箱验证。
+4. 回到 Cloudflare 控制台，确认账号无“未验证邮箱”的警告横幅。
 
-首次登录可能提示设置双重验证。可按自己的账号安全安排完成；它和网关访问密钥是两回事，不需要为了 Kindlia 关闭已有的双重验证。
+![Cloudflare 注册页：填写自己的邮箱与密码](images/gateway/01-cf-signup.jpg)
+*图 1：Cloudflare 注册页面*
 
-![首次登录可能出现的双重验证提示](images/gateway/02-first-login.jpg)
+首次登录时可能会提示设置双重验证（2FA），按照个人偏好设置或暂不设置均可。
 
-进入首页后，**这条路线不需要点击 Add a domain，也不用输入自己的域名**。
+![首次登录可能出现的双重验证提示](images/gateway/02-cf-first-login.jpg)
+*图 2：双重验证提示（按需选择）*
 
-![账号首页：本教程从计算服务开始](images/gateway/03-account-home.jpg)
+> 此时控制台首页会看到“添加域名”按钮，**先不要急着点击添加**，我们先在下一步免费申领一个属于自己的二级域名。
 
-> 如果注册或登录页提示 CAPTCHA 错误，却看不到验证框：正常刷新一次，检查网络及浏览器扩展是否拦截验证组件，或由本人完成验证后继续。不要反复点击注册，也不要绕过浏览器的证书警告。
+---
 
-## 二、创建一个免费 Worker
+## 二、免费获取专属二级域名（DigitalPlat）
 
-1. 在左侧展开 **计算 / Compute**，点击 **Workers 和 Pages / Workers & Pages**。
-2. 在页面右上角点击 **创建应用程序 / Create application**。
+> **若已有域名可跳过此步骤**
 
-![Workers 和 Pages：右上角创建应用程序](images/gateway/04-workers-menu.jpg)
+Cloudflare 默认的 `workers.dev` 在国内被污染，所以我们需要一个正常的域名作为流量入口。这里推荐使用 **DigitalPlat** 提供的免费域名服务（支持完整的 DNS NS 委派，完全免费）。
 
-3. 选择 **从 Hello World! 开始 / Start with Hello World!**。不用连接 GitHub，不选 Pages，也不用上传静态网站。
+1. 打开 [DigitalPlat 平台官网](https://digitalplat.org) 注册账号并登录。
+2. 首次进入工作区，在“您想先做什么？”向导中，点击选择 **【获取域名】**（找到一个名称并将其连接到您的项目）。
+   ![DigitalPlat 引导页：点击获取域名](images/gateway/03-digitalplat-welcome.png)
+   *图 3：DigitalPlat 向导页，点击“获取域名”*
 
-![选择 Hello World 作为初始 Worker](images/gateway/05-hello-world.jpg)
+3. 在计划向导中，下拉选择 **【只需要必要的步骤】**，然后点击 **【开始我的指导设置】**。
+   ![域名配置向导：选择必要步骤](images/gateway/04-digitalplat-guide.png)
+   *图 4：选择“只需要必要的步骤”并点击开始设置*
 
-4. 将 Worker 名称改成 `kindlia-gateway`。若名称不可用，换一个自己容易记住的名称。
-5. 保留页面默认的 `workers.dev` 地址。部分新账号会先要求设置一个 `workers.dev` 子域，按提示选一个可用名称即可；这是 Cloudflare 提供的地址，不是让你购买域名。
-6. 本教程使用 Kindlia 的网关密钥鉴权，不额外开启 Cloudflare Access 登录保护；Kindle 原生客户端无法完成网页式 Access 登录。
-7. 点击 **部署 / Deploy**，等待完成。
+4. 进入左侧菜单【资产 → 域名 → 注册域名】。页面底部展示了平台提供的免费后缀：包含 `.dpdns.org`（免费 · $0.00）、`.us.kg`（免费 · $0.00）等。
+   ![域名开放注册列表](images/gateway/05-digitalplat-domain-list.png)
+   *图 5：免费域名开放注册列表*
 
-![填写 Worker 名称并部署](images/gateway/06-worker-name.jpg)
+5. 点击进入 **【DigitalPlat Domains】** 选项卡：
+   - 在搜索框中输入你喜欢的域名前缀（例如 `kindletest11`，建议由英文字母和数字组成）；
+   - 右侧后缀选择 **`.dpdns.org`**；
+   - 勾选底部的“我已认真阅读并同意上述所有适用政策和服务条款”；
+   - 点击右侧蓝色的 **【检查可用性】**。
+   ![输入前缀并检查可用性](images/gateway/06-digitalplat-check-domain.png)
+   *图 6：输入域名前缀并检查可用性*
 
-成功后会进入 Worker 概述页。记下自己的生产地址，例如：
+6. 弹窗提示“免费域名可注册”：
+   - **委派模式**：务必选择右侧红框中的 **【稍后配置】**（先注册域名，稍后再委派给 Cloudflare）；
+   - **本次使用名额**：保持选中“免费域名名额”；
+   - **账户验证**：免费名额需要完成一次账户验证，点击黄色提示框内的 **【验证账户】**（绑定授权一次你的 GitHub 账号（刚注册的也行）即可通过）；
+   - 验证通过后，点击弹窗右下角蓝色的 **【注册】** 按钮。
+   ![委派模式选稍后配置并完成账户验证](images/gateway/07-digitalplat-verify-register.png)
+   *图 7：委派模式选“稍后配置”，完成账户验证后点击注册*
 
-```text
-https://kindlia-gateway.your-account.workers.dev
-```
+7. 注册成功后，会自动进入该域名的管理详情页（例如 `管理 90yv278p.dpdns.org`）：
+   - 记下自己的完整域名（示例为 `90yv278p.dpdns.org`）；
+   - 在【名称服务器】选项卡下方，留有【* 名称服务器 1】和【* 名称服务器 2】输入框；
+   - **先保留该网页不要关闭**，接下来我们前往 Cloudflare 获取要填入的名称服务器地址。
+   ![域名管理详情页](images/gateway/08-digitalplat-manage-domain.png)
+   *图 8：域名管理页面，等待填入名称服务器*
 
-其中 `your-account` 必须换成页面实际分配的子域；Worker 名称不同，地址的第一段也会不同。
+---
 
-![Worker 概述页：可以找到访问地址、编辑代码和设置入口](images/gateway/07-worker-overview.jpg)
+## 三、将免费域名托管至 Cloudflare（配置 DNS 委派）
 
-现在访问地址只会看到 `Hello World!`，这是正常的，**还没有部署 Kindlia 反代代码**。
+把域名的 DNS 解析权交给 Cloudflare，这样 Cloudflare Worker 才能直接绑定该域名，并由 Cloudflare 自动签发 HTTPS 证书。
 
-## 三、准备一份自己的网关密钥
+1. 打开 Cloudflare 控制台，在左侧菜单展开 **【域名 / Domains】** → 点击 **【概览】**，然后点击页面右上角的蓝色 **【添加域名 / Add domain】** 按钮。
+   ![Cloudflare 概览：点击添加域名](images/gateway/09-cf-add-domain.png)
+   *图 9：Cloudflare 控制台点击“添加域名”*
 
-建议生成一段 **32～64 位随机字母、数字及 `-_.~` 字符**，然后保存在自己可信的地方。不要使用邮箱密码、源站密码，也不要使用教程中的示例值。
+2. 在“添加站点”页面中，选择第一项 **【连接域名】**（让您的站点更快、更安全、更可靠）。
+   ![点击选择连接域名](images/gateway/10-cf-connect-domain.png)
+   *图 10：点击选择“连接域名”*
 
-Kindlia 接受 16～256 位、仅由英文字母、数字和 `-_.~` 组成的密钥。中文、空格、`+`、`/`、`=` 不在允许范围内。
+3. 输入你在 DigitalPlat 申请的完整域名（例如 `90yv278p.dpdns.org`）：
+   - 在下方的“额外配置”中，建议将【搜索】、【代理】、【训练】均切换为 **【阻止】**（防止爬虫消耗个人额度，保障私有网关安全）；
+   - 点击右下角的 **【继续】**。
+   ![输入域名并阻止爬虫策略](images/gateway/11-cf-domain-security.png)
+   *图 11：输入完整域名，安全策略选择阻止，点击继续*
 
-如果你在 Windows 上没有现成的随机密码生成工具，可以在自己的 PowerShell 中运行下面这段命令。它只在本机生成随机内容，不会上传：
+4. 进入“选择计划”页面：
+   - 选中最左侧的 **【免费 US$0 / Free $0】** 计划卡片；
+   - 点击该卡片下的 **【选择计划】**（完全免费，无需绑定信用卡）。
+   ![选择免费 US$0 计划](images/gateway/12-cf-select-free-plan.png)
+   *图 12：选择免费计划*
+
+5. 进入“DNS 记录”检视页面：
+   - 全新域名无记录属正常现象，**不需要手动添加任何记录**；
+   - 直接滑到页面最底部，点击蓝色的 **【继续前往激活】**。
+   ![直接点击继续前往激活](images/gateway/13-cf-continue-activation.png)
+   *图 13：无需添加任何记录，直接点击“继续前往激活”*
+
+6. Cloudflare 会展示分配给你的专属名称服务器地址（Nameservers），通常格式如下：
+   - `ara.ns.cloudflare.com`
+   - `clayton.ns.cloudflare.com`
+   *(注意：每个人分配到的名称服务器前缀可能不同，请以你屏幕显示的实际地址为准，点击右侧图标复制)*
+   ![Cloudflare 专属名称服务器](images/gateway/14-cf-assigned-nameservers.png)
+   *图 14：复制 Cloudflare 分配给你的两台名称服务器*
+
+7. 回到 DigitalPlat 域名管理页面的 **【名称服务器】** 选项卡：
+   - 将上面两行 Cloudflare 地址分别粘贴到 **【* 名称服务器 1】** 和 **【* 名称服务器 2】**；
+   - 检查前后无多余空格，点击右下角蓝色的 **【更新名称服务器】** 保存生效。
+   ![在 DigitalPlat 更新名称服务器](images/gateway/15-digitalplat-update-nameservers.png)
+   *图 15：将 Cloudflare 地址粘贴至 DigitalPlat 并更新*
+
+8. 稍候片刻（一般 1~3 分钟全球 DNS 生效），回到 Cloudflare 刷新该域名的概览页：
+   - 看到绿色对勾提示 **【您的域现在受 Cloudflare 保护】**，说明域名托管彻底成功！
+   - 同时在右侧面板中，能看到【未连接 Workers】和醒目的 **【创建 Worker】** 按钮。
+   ![域名受 Cloudflare 保护](images/gateway/16-cf-domain-active.png)
+   *图 16：DNS 委派成功，右侧面板可一键点击“创建 Worker”*
+
+---
+
+## 四、创建免费 Worker 并发布 Kindlia 网关代码
+
+现在我们来创建负责请求代理与图片转发的 Worker。
+
+### 4.1 创建初始 Worker
+- **极简入口**：直接在图 16 右侧面板点击蓝色的 **【创建 Worker】**；
+- 或者从 Cloudflare 控制台左侧菜单点击 **【计算 / Compute】** → **【Workers 和 Pages】**，点击右上角 **【创建应用程序 / Create application】**。
+  ![Workers 和 Pages 菜单](images/gateway/17-cf-workers-menu.jpg)
+  *图 17：点击“创建应用程序”*
+
+- 选择 **【从 Hello World! 开始 / Start with Hello World!】**。
+  ![选择 Hello World](images/gateway/18-cf-worker-hello-world.jpg)
+  *图 18：选择 Hello World 作为起点*
+
+- 将 Worker 名称修改为 `kindlia-gateway`（若重名可自定义，例如 `my-kindlia-gateway`）。
+- 底部选项保持默认，点击 **【部署 / Deploy】**。
+  ![填写名称并部署](images/gateway/19-cf-worker-name-deploy.jpg)
+  *图 19：修改名称并部署*
+
+部署完成后，进入 Worker 概览页面。
+
+---
+
+### 4.2 发布 Kindlia 网关源码
+
+#### 推荐方式：网页编辑器直接发布（无需安装任何工具）
+
+1. 打开网关源码文件：[Kindlia 网关源码 index.js](https://github.com/mmnnwjw/Kindlia/blob/main/workers/kindlia-gateway/src/index.js)。
+2. 点击文件右上角的 **【Copy raw file / 复制原始文件】** 按钮（或点击 `Raw` 纯文本页面后 `Ctrl + A`、`Ctrl + C` 复制全部内容）。
+   ![复制网关源码](images/gateway/20-github-copy-source-code.jpg)
+   *图 20：点击 Copy raw file 复制全部代码*
+
+3. 回到 Cloudflare 控制台刚部署好的 Worker 概览页面，点击右上角 **【编辑代码 / Edit code】** 按钮。
+4. 在左侧的代码编辑器中，按键盘 `Ctrl + A` 全选原来的 Hello World 示例代码，按 `Delete` 清空。
+5. 按 `Ctrl + V` 粘贴刚刚复制的完整网关源码。
+6. 点击右上角醒目的蓝色 **【部署 / Deploy】** 按钮，等待右上角弹出部署成功提示。
+
+> 粘贴的代码开头应包含路由处理逻辑，结尾包含 `export default { ... }`。无需将自己的域名或密钥写死在代码中，下一步我们在系统变量中统一配置。
+
+---
+
+> #### 备用方式：若网页编辑器白屏，使用 Wrangler 命令行发布
+> 若因本地网络原因 Cloudflare 网页编辑器一直转圈或无法加载，可使用官方命令行工具：
+> 1. 电脑安装 [Node.js LTS](https://nodejs.org/)。
+> 2. 打开 PowerShell，进入网关工程目录并运行：
+>    ```powershell
+>    npm.cmd ci
+>    npx.cmd wrangler login
+>    ```
+>    ![Wrangler 授权完成](images/gateway/21-wrangler-login-auth.jpg)
+>    *图 21：Wrangler 官方网页授权*
+> 3. 授权成功后，运行发布：
+>    ```powershell
+>    npx.cmd wrangler deploy --keep-vars
+>    ```
+
+---
+
+## 五、配置网关运行时密钥与图片白名单
+
+我们需要为 Worker 添加两个环境变量：
+1. `GATEWAY_TOKEN`：你的私有网关访问密码（加密存储）。
+2. `IMAGE_HOSTS`：小说封面与文库插图的图床白名单（公开变量）。
+
+### 5.1 生成专属的高强度网关密钥
+网关密钥用于防止其他人盗用你的网关额度。建议生成一段 32~64 位的随机字符串。在 Windows PowerShell 中运行下面一行命令即可在本地安全生成一段高强度密钥：
 
 ```powershell
-$gatewayBytes = New-Object byte[] 24
-$gatewayRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-$gatewayRng.GetBytes($gatewayBytes)
-[Convert]::ToBase64String($gatewayBytes).Replace('+', '-').Replace('/', '_').TrimEnd('=')
-$gatewayRng.Dispose()
+$b = New-Object byte[] 24; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b).Replace('+','-').Replace('/','_').TrimEnd('=')
 ```
 
-复制输出的那一行。下一步填到 Cloudflare，之后还要原样填到 Kindle。这里不会提供一个所有人共用的密钥。
+复制输出的那一串随机文本（例如 `W7k_vL2vP0mN8bV5cZ1xW7-A3`），先保存在记事本中。
 
-## 四、在 Worker 中添加两个变量
+---
 
-进入刚创建的 Worker，打开 **设置 / Settings**，找到 **运行时变量和密钥 / Runtime Variables and Secrets**，点击 **添加变量 / Add variable**。
+### 5.2 在 Worker 中添加两个变量
 
-![设置页中的运行时变量和密钥](images/gateway/08-runtime-variables.jpg)
+进入该 Worker 的管理页面，点击顶部导航栏中的 **【设置 / Settings】**，在左侧找到 **【运行时变量和密钥 / Runtime Variables and Secrets】**，点击 **【添加变量 / Add variable】**。
+![进入运行时变量设置](images/gateway/22-cf-runtime-variables-menu.jpg)
+*图 22：添加运行时变量入口*
 
-### 4.1 添加 GATEWAY_TOKEN
+#### 变量 1：添加 `GATEWAY_TOKEN`（生产环境加密密钥）
+按以下说明填写：
+- **环境**：勾选 **【生产 / Production】**；
+- **名称**：`GATEWAY_TOKEN`（必须全部大写）；
+- **值**：粘贴刚刚生成的随机密钥；
+- **密钥 / Secret 复选框**：务必 **【勾选】**（保存后 Cloudflare 将自动加密该值，不向外部泄露）；
+- 点击 **【添加 1 个变量并部署 / Add variable and deploy】**。
+![添加 GATEWAY_TOKEN 密钥](images/gateway/23-cf-secret-gateway-token.jpg)
+*图 23：添加 GATEWAY_TOKEN 并勾选加密*
 
-按下面的表填写：
+#### 变量 2：添加 `IMAGE_HOSTS`（普通白名单变量）
+再次点击 **【添加变量】**：
+- **环境**：勾选 **【生产 / Production】**；
+- **名称**：`IMAGE_HOSTS`（全大写）；
+- **值**：复制并粘贴以下一整行图床域名列表：
+  ```text
+  *.mitemin.net,*.pximg.net,images-cn.ssl-images-amazon.cn,images-na.ssl-images-amazon.com,images-fe.ssl-images-amazon.com,m.media-amazon.com,images.amazon.com,cdn.kdkw.jp,*.bookwalker.jp,*.novelia.cc
+  ```
+- **密钥 / Secret 复选框**：**【不要勾选】**（普通明文变量即可）；
+- 点击 **【添加 1 个变量并部署】**。
+![添加 IMAGE_HOSTS 变量](images/gateway/24-cf-variable-image-hosts.jpg)
+*图 24：添加 IMAGE_HOSTS 域名白名单*
 
-| 项目 | 填什么 |
-| --- | --- |
-| 环境 | 勾选 **生产 / Production** |
-| 名称（当前中文界面显示为“密钥”） | `GATEWAY_TOKEN`，全部大写 |
-| 值 | 第三步生成的自己的随机密钥 |
-| 密钥 / Secret 复选框 | **勾选**；旧版界面可能是选择类型 `Secret` |
+最后核对变量列表，确认生产环境下包含 `GATEWAY_TOKEN`（显示为值已加密）与 `IMAGE_HOSTS` 两个条目。
+![核对保存后的变量](images/gateway/25-cf-variables-saved-overview.jpg)
+*图 25：核对变量保存状态*
 
-点击 **添加 1 个变量并部署 / Add variable and deploy**，等待完成。
+---
 
-![GATEWAY_TOKEN：选择生产环境并勾选密钥，截图未填写真实值](images/gateway/09-gateway-secret.jpg)
+## 六、将 Worker 绑定到免费自定义域名
 
-保存后应显示 **值已加密 / Value encrypted**。之后 Cloudflare 不会再显示明文，所以要保存好自己生成的原值。
+1. 在当前 Worker 的管理页面中，点击顶部标签栏中的 **【域】**。
+2. 找到“自定义域和路由”一栏，点击右侧蓝色的 **【+ 添加域名】** 按钮。
+   ![Worker 页面进入域设置并点击添加域名](images/gateway/26-cf-worker-domains-tab.png)
+   *图 26：在 Worker 顶栏进入“域”，点击“+ 添加域名”*
 
-### 4.2 添加 IMAGE_HOSTS
+3. 在弹出的“连接域名”窗口中，点击选中你在第二步已托管到 Cloudflare 的免费域名（例如 `eqnhvhiv2oyds3ajbv5ucrn8ip4t.dpdns.org`）。
+   ![在列表中选择托管的域名](images/gateway/27-cf-worker-select-domain.png)
+   *图 27：在连接列表中点击选中已托管的域名*
 
-再次点击 **添加变量**，名称填 `IMAGE_HOSTS`，值复制下面这一整行。它是公开的图片站白名单，**不用勾选密钥 / Secret**。
+4. 进入“连接至该域名”设置界面：
+   - 在 **子域名 (optional)** 输入框中，填写你喜欢的二级域名前缀，例如输入 `kindlia-gateway`（也可以留空直接使用根域名）；
+   - **启用对象**：保持默认的“生产”环境；
+   - 点击右下角蓝色的 **【添加域名】** 按钮。
+   ![设置子域名并添加域名](images/gateway/28-cf-worker-set-subdomain.png)
+   *图 28：设置子域名前缀并确认添加*
+
+5. 添加完成后回到 Worker 概览页面，顶部显示的正式访问入口已更新为你配置好的专属自定义域名（例如 `kindlia-gateway.eqnhvhiv2oyds3ajbv5ucrn8ip4t.dpdns.org`）。Cloudflare 会在后台全自动下发 SSL 证书并配置 DNS 解析，无需手动干预。
+   ![确认 Worker 自定义网关地址已生效](images/gateway/29-cf-worker-final-gateway-url.png)
+   *图 29：Worker 概览页确认自定义网关地址已生效*
+
+---
+
+### 6.1 验证网关连通性与健康状态
+
+拿出你的电脑或手机浏览器，在你的自定义域名后加上 `/health` 打开访问：
 
 ```text
-*.mitemin.net,*.pximg.net,images-cn.ssl-images-amazon.cn,images-na.ssl-images-amazon.com,images-fe.ssl-images-amazon.com,m.media-amazon.com,images.amazon.com,cdn.kdkw.jp,*.bookwalker.jp,*.novelia.cc
+https://kindlia-gateway.your-domain.dpdns.org/health
 ```
+*(注意：请将地址换成你自己绑定的实际完整域名！)*
 
-这里不要加引号，不要写成 JSON 数组，也不要把网页代码块的反引号复制进去。然后点击 **添加 1 个变量并部署**。
-
-![IMAGE_HOSTS：普通变量，不勾选密钥](images/gateway/10-image-hosts.jpg)
-
-最后应能看到两个名称：`GATEWAY_TOKEN` 和 `IMAGE_HOSTS`。前者的值已加密，后者能看到域名列表。
-
-![两个运行时变量保存后的示例](images/gateway/11-variables-saved.jpg)
-
-只添加到“预览”环境不够。Kindle 使用的是生产地址，务必核对 **生产** 标签页。
-
-## 五、发布 Kindlia 网关代码
-
-任选下面一种方式。**网页编辑器能打开就用 5A；编辑区持续空白或转圈就用 5B**。它们发布的是同一份源码，不需要两种都做。
-
-### 5A：网页编辑器发布
-
-1. 打开仓库的 [网关源码 index.js](https://github.com/mmnnwjw/Kindlia/blob/main/workers/kindlia-gateway/src/index.js)。
-2. 点击文件右上角的 **Copy raw file / 复制原始文件**。不要使用页面顶端的 Copy path；那只会复制文件路径。
-3. 也可以点击 **Raw**，在纯代码页面按 `Ctrl+A`、`Ctrl+C` 复制全部代码。
-
-![GitHub 源码页：Raw 旁的复制原始文件按钮](images/gateway/13-source-code.jpg)
-
-4. 回到 Cloudflare 的 Worker 概述页，点击右上角 **编辑代码 / Edit code**。
-5. 等左侧编辑器加载完成，点击代码区域，按 `Ctrl+A` 全选原来的 Hello World 代码，再按 `Ctrl+V` 粘贴完整源码。
-6. 保留文件名即可，不需要把自己的地址或密钥写进 JavaScript。
-7. 点击右上角 **部署 / Deploy**，等待发布完成。只保存版本、只运行预览，都不等于发布到了生产地址。
-8. 继续第六步。
-
-代码应保留最后的 `export default`。如果编辑器报语法错误，先检查是否复制完整、是否误带了 Markdown 的三反引号。
-
-### 5B：编辑器空白时，用官方 Wrangler 发布
-
-这条备用路线需要电脑安装 Node.js，但不用安装 Python、Git 或 Rust，也不用申请 API Token。下面以 Windows 为例。
-
-**① 安装 Node.js。** 从 [Node.js 官网](https://nodejs.org/zh-cn/download)下载 **LTS** 版本并安装。安装完成后重新打开 PowerShell，运行：
-
-```powershell
-node --version
-npm.cmd --version
-```
-
-两条命令都能显示版本号才继续。使用 `npm.cmd`、`npx.cmd` 可以避免 Windows 把同名 `.ps1` 脚本拦下，不需要修改 PowerShell 执行策略。
-
-**② 下载源码 ZIP。** 在 [Kindlia 仓库首页](https://github.com/mmnnwjw/Kindlia)点击 **Code → Download ZIP**，完整解压。注意：这里下载的是仓库源码 ZIP，**不是** Kindle 的 `kindlia-版本号.zip` 安装包；安装包中不含完整的 Worker 工程。
-
-**③ 打开源码里的 `workers/kindlia-gateway/wrangler.jsonc`。** 用文本编辑器把：
-
-```jsonc
-"workers_dev": false,
-```
-
-改成：
-
-```jsonc
-"workers_dev": true,
-```
-
-保持 `"routes": []`，不要填写任何域名。`name` 应与第二步创建的 Worker 名称相同，默认就是 `kindlia-gateway`。保留其他配置，保存文件。
-
-**④ 在这个目录打开 PowerShell。** 可以进入 `workers/kindlia-gateway` 文件夹，在资源管理器地址栏输入 `powershell` 并回车；也可以在终端用 `cd` 进入自己的实际解压路径，例如：
-
-```powershell
-cd "C:\Users\你的用户名\Downloads\Kindlia-main\workers\kindlia-gateway"
-npm.cmd ci
-npx.cmd wrangler login --scopes account:read user:read workers:write workers_scripts:write
-```
-
-路径只是示例，要替换成你实际解压的位置。`npm.cmd ci` 安装项目锁定的工具版本，等它结束后再执行登录命令。
-
-**⑤ 在弹出的官方 Cloudflare 网页授权。** 核对页面显示的应用由 Cloudflare 管理、选中的是刚才创建 Worker 的账号，然后点击 **Authorize**。如果有多个账号，务必选择正确的一个。
-
-![Wrangler 官方授权完成页面](images/gateway/12-wrangler-granted.jpg)
-
-看到 **Authorization granted to Wrangler** 后返回 PowerShell，不需要操作页面下面的 AI 工具提示。若登录命令提示授权超时，重新运行登录命令，再及时完成授权。
-
-**⑥ 发布：**
-
-```powershell
-npx.cmd wrangler deploy --config wrangler.jsonc --keep-vars
-```
-
-等到命令显示 `Uploaded`、`Deployed`、生产 `https://...workers.dev` 地址和 `Current Version ID`。这才表示生产代码已发布。
-
-`--keep-vars` 用于保留面板中的普通变量；生产环境的密钥也须继续存在。发布后回到设置页核对 `GATEWAY_TOKEN` 和 `IMAGE_HOSTS`，再做第六步检查。
-
-> 本文这条无域名路线不要运行 `tools/deploy_gateway.py --deploy`：那个工具面向自定义域名，要求指定 `--domain`。也不要把 `workers_dev` 改回 `false` 后再次发布，否则会关闭这里使用的入口。
-
-## 六、检查自己的入口是否可用
-
-假设控制台给你的生产地址是：
-
-```text
-https://kindlia-gateway.your-account.workers.dev
-```
-
-在浏览器地址后加上 `/health`，打开：
-
-```text
-https://kindlia-gateway.your-account.workers.dev/health
-```
-
-正确响应应类似：
+如果一切正常，页面将立即返回如下 JSON 格式的健康状态：
 
 ```json
 {"service":"kindlia-gateway","version":1,"authenticated":true}
 ```
 
-![生产入口的 health 响应](images/gateway/14-health.jpg)
+> **返回结果诊断说明**：
+> - `authenticated: true`：说明网关源码、密钥、SSL 证书及域名解析全部正常！
+> - `authenticated: false`：说明未检测到密钥，请检查第五步的 `GATEWAY_TOKEN` 是否拼写错误，或是否漏勾了“生产”环境。
+> - 直接访问域名根路径返回 403 是完全正常的安全防护表现，检查请统一使用 `/health`。
 
-这里的 `authenticated: true` 表示 Worker 已配置访问密钥，**不是**浏览器已经登录源站，也不表示任何一个 Kindle 填写的密钥都正确。`/health` 本身不需要密钥。
+---
 
-| 你看到什么 | 说明与下一步 |
-| --- | --- |
-| `Hello World!` | 仍在运行示例代码，回第五步发布完整源码 |
-| `authenticated: false` | 未配置生产 `GATEWAY_TOKEN`，回第四步核对环境与部署 |
-| 根地址 `/` 返回 403 | 网关没有网站首页；配置密钥后，普通浏览器直接访问根路径被拒绝是正常的，检查用 `/health` |
-| 浏览器直接打开小说 API 返回 403 | 浏览器没有携带 `X-Kindlia-Key` 请求头，不能据此判断网关坏了 |
-| `/health` 也超时、DNS 或 TLS 报错 | 先解决当前网络对该 `workers.dev` 地址的访问，不要继续反复修改密码 |
+## 七、在 Kindle 客户端配置并启用网关
 
-健康检查通过后，下一步让 Kindlia 带上你的密钥访问真正的小说接口。
-
-## 七、填写 Kindle 配置文件
-
-### 7.1 先退出应用，再备份
-
-1. 在 Kindle 的 Kindlia 中进入 **我的 → 退出应用**。不要只按电源键休眠。
-2. 用 USB 将 Kindle 连接电脑，打开 Kindle 磁盘。
-3. 找到 `extensions/kindlia/config.toml`。这就是设备中的 `/mnt/us/extensions/kindlia/config.toml`。
-4. 在同一个 `kindlia` 文件夹下的 `backups/` 中保存一份配置副本，例如 `backups/config-before-gateway.toml`。已有同名备份时换一个名字，保留原备份。
+网关就绪后，最后一步是将你的专属网关地址填入 Kindle 客户端。
 
 ```text
-Kindle 磁盘
+Kindle 盘符
 └─ extensions
    └─ kindlia
-      ├─ config.toml                ← 修改这个文件
-      ├─ config.example.toml        ← 模板，不是正在使用的配置
-      ├─ backups
-      │  └─ config-before-gateway.toml
-      ├─ bin
-      ├─ data
-      └─ cache
+      ├─ config.toml  ← 需要修改的文件
+      ├─ bin/
+      └─ data/
 ```
 
-如果找不到 `config.toml`，先安全弹出 Kindle，启动 Kindlia 一次并正常退出，再连接电脑。不要为了配置反代删除账号、缓存或阅读进度。
+> [!CAUTION]
+> 安装Kindlia之后需要**至少启动一次**来生成`config.toml`
 
-### 7.2 只修改这三个字段
+---
 
-用支持 UTF-8 的文本编辑器打开 `config.toml`，找到并修改下面三个字段。**同一个字段只保留一处**，不要在文件末尾又追加一组同名字段。
+### 7.1 修改三个关键参数
+
+使用支持 UTF-8 编码的文本编辑器（如 VS Code、Sublime Text 或 Notepad++，不要使用 Windows 原生记事本以免破坏文件编码）打开 `config.toml`，找到并修改以下三行：
 
 ```toml
 gateway_enabled = true
-gateway_url = "https://kindlia-gateway.your-account.workers.dev"
-gateway_key = "REPLACE_WITH_YOUR_OWN_GATEWAY_KEY"
+gateway_url = "https://kindlia-gateway.your-domain.dpdns.org"
+gateway_key = "W7k_vL2vP0mN8bV5cZ1xW7-A3"
 ```
 
-- `gateway_url` 换成自己的生产根地址，保留 `https://`，不加 `/health`、`/main` 或 `/api`。
-- `gateway_key` 换成第三步生成、第四步填入 `GATEWAY_TOKEN` 的同一段密钥，大小写也要一致。
-- `gateway_enabled` 使用小写 `true`，不加引号；`"true"` 是字符串，不是开关。
-- 地址与密钥使用英文半角双引号，不用中文引号。
-- 保存时保持 UTF-8，文件名必须仍是 `config.toml`，不能变成 `config.toml.txt`。
+- `gateway_enabled`：改为 `true`（必须全部小写，不带双引号）；
+- `gateway_url`：填写你在第六步绑定的**自定义域名**，保留前缀 `https://`，**末尾千万不要加斜杠 `/` 或 `/health`**；
+- `gateway_key`：填写第五步生成的专属密钥，必须与 Cloudflare 中 `GATEWAY_TOKEN` 完全一致。
 
-下面三个源站地址**保持原值，不要换成 Worker 地址**：
+> **保持源站原配置不动**：
+> 文件中的这三个地址配置**请保持原样**（如果你不知道修改它们意味着什么的话）：
+> ```toml
+> api_base_url = "https://n.novelia.cc"
+> auth_base_url = "https://auth.novelia.cc"
+> forum_base_url = "https://forum.novelia.cc"
+> ```
 
-```toml
-api_base_url = "https://n.novelia.cc"
-auth_base_url = "https://auth.novelia.cc"
-forum_base_url = "https://forum.novelia.cc"
-```
+---
 
-Kindlia 会自动在传输时选择小说、登录、评论和图片的转发路径。`forum_base_url` 在这里仅供书籍评论使用，不接入论坛页面。
+### 7.2 保存并重启 Kindlia
+1. 保存 `config.toml` 文件。
+2. 在电脑托盘安全弹出 Kindle 盘符，拔出 USB 数据线。
+3. 在 Kindle 的 KUAL 启动器中重新打开 Kindlia。
+4. 进入 **【我的】** → **【设置】** → **【网络】**，核对网络状态：
+   - 反代开关：**开启**；
+   - 反代地址：显示为你的自定义域名；
+   - 反代密钥：显示为“已设置”；
 
-### 7.3 重新启动，并核对设置
+![Kindle 网络设置界面](images/gateway/30-kindle-network-settings.png)
+*图 30：Kindle 网络设置中确认反代开关已开启*
 
-保存后安全弹出 Kindle，从 KUAL 重新启动 Kindlia。进入 **我的 → 设置 → 网络**，核对：
+---
 
-- 反代开关：开；
-- 反代地址：自己的 `https://...workers.dev` 地址；
-- 反代密钥：已设置；
-- 离线模式：关。
+## 八、常见问题与排查指南（FAQ）
 
-也可以在这个设置页直接填写地址和密钥，再开启反代。填写顺序为 **地址 → 密钥 → 开关**，不要只打开开关而留空另外两项。
-
-![KPW5 模拟器中的网络设置：开关已开、密钥已设置，明文密钥不会显示](images/gateway/15-kindle-network.png)
-
-## 八、用实际内容检查
-
-1. 打开 **发现 → 网络小说**，等待书目加载；点击一本以前没有缓存过的书，进入详情后打开正文。
-2. 有源站账号时，仍在 Kindlia 原来的登录页登录。Cloudflare 账号不用于登录小说网站。
-3. 打开 **文库小说**，进入书籍详情并选择某一卷。首次需要下载完整 EPUB，等待下载和解析完成后才会进入阅读器。
-4. 有封面的书还应能显示封面；只看得到文字、图片始终失败时，回第四步检查 `IMAGE_HOSTS`。
-
-![通过新建 Worker 实际加载的在线书目（KPW5 模拟器）](images/gateway/16-kindle-discovery.png)
-
-旧缓存能打开不能证明反代可用。请选择没读过的在线内容，或进行一次新的搜索。首次 EPUB 下载也不要用浏览器的 `/health` 结果替代验收。
-
-## 常见问题
-
-| 现象 | 排查方法 |
+| 常见现象 / 报错 | 根本原因与解决方案 |
 | --- | --- |
-| Kindle 提示 `Invalid gateway key` / HTTP 403 | 检查开关是否开启、客户端密钥是否与生产 `GATEWAY_TOKEN` 一致，是否误用了 Cloudflare 登录密码 |
-| 提示 `Set the GATEWAY_TOKEN Worker secret first` / HTTP 503 | 检查是否漏填密钥、只部署到了预览环境，或误拼了变量名 |
-| 列表能加载，封面或插图失败 | 检查 `IMAGE_HOSTS`；新增图片站需添加对应的精确域名或明确的 `*.suffix`，不要使用任意主机通配 |
-| 登录失败但匿名书目正常 | 先核对源站账号和源站服务状态；Cloudflare 登录成功与源站登录成功是两回事 |
-| 502 / `Upstream connection failed` | Worker 到源站的连接失败；稍后重试，核对源站是否正常，不要关闭 TLS 校验 |
-| 单本小说正文返回 500 / `从源站获取失败` / `Tunnel failed` | 可能是源站抓取该小说发布站失败；先换一本已翻译的小说检查。若其他书正常，不要因此重置网关或账号 |
-| 404 / `Route or method not allowed` | 确认部署的是完整网关源码；它不是任意网址代理，也不是普通网页镜像 |
-| Worker 已部署，只有某台设备超时 | 分别检查电脑与 Kindle 所在网络能否访问该 `workers.dev` 入口；电脑的代理通常不会自动作用于 Kindle |
-| 第一次文库下载较慢 | EPUB 可能有数 MB，受网络影响；确认实际进度，等待完成，不要把下载提示当作已经进入阅读器 |
-| 编辑器和预览一直空白 | 正常刷新后仍不恢复，使用第五步 5B；不要凭空等待或认为已经发布了源码 |
-| 提示每天请求数达到上限 / Error 1027 | 在控制台查看 Free 用量，等待 UTC 零点重置；个人共享同一账号的其他 Worker 也会消耗额度 |
+| **为什么不用 `workers.dev`？** | `workers.dev` 属于 Cloudflare 共享二级域名，在国内被全网 DNS 污染或 SNI 握手阻断，连接成功率极低。自定义域名能完全规避该阻断。 |
+| **访问自定义域名提示证书错误？** | 新添加自定义域后，Cloudflare 需要 1~3 分钟签发 Universal SSL 证书，稍候刷新即可；并在 Cloudflare 的【SSL/TLS】中确认加密模式为 **完全 / Full**。 |
+| **访问 `/health` 返回 `authenticated: false`** | 漏填了 `GATEWAY_TOKEN`，或变量仅保存在了“预览”环境未部署到“生产”环境，请返回第五步核对。 |
+| **Kindle 提示 `Invalid gateway key` (HTTP 403)** | Kindle 中填写的 `gateway_key` 与 Cloudflare 中的 `GATEWAY_TOKEN` 不一致（检查是否有首尾空格或大小写误写）。 |
+| **访问小说提示 `502 Upstream connection failed`** | Worker 请求小说源站超时，通常是源站瞬时高负载或网络波动，请稍等 1~2 分钟重试。 |
+| **列表正常但所有小说封面图加载失败** | 检查第四步中 `IMAGE_HOSTS` 变量名与值是否完整正确，确保其未勾选 Secret。 |
+| **DigitalPlat 域名到期后会扣费吗？** | 不会。DigitalPlat 提供的域名永久免费，在到期前 120 天内可免费一键续期，无需绑定任何支付方式。 |
 
-### 暂时关闭或恢复
-
-在 **我的 → 设置 → 网络** 关闭反代开关，或退出应用后把 `gateway_enabled` 改回 `false`，即可恢复直连。无需删除缓存、账号和进度。若配置文件写错导致无法启动，退出应用，用 `backups/` 中的配置副本恢复后重新启动。
-
-### 以后更新网关代码
-
-网页方式重新复制最新 `index.js` 到原 Worker 并部署；Wrangler 方式在自己的源码目录更新代码后重新发布。继续保留 `workers_dev = true`、自己的密钥和图片白名单。不要把自己的密钥、登录令牌或生成的客户端配置提交到 GitHub。
-
-## 免费额度与参考资料
-
-Cloudflare Workers Free 当前每日额度为 **100,000 次请求，UTC 零点重置（日本时间 09:00）**，每次 HTTP 请求 CPU 时间额度为 10 ms，网络等待不计入 CPU。网关不需要 KV、R2、D1 等存储绑定，不需要为了本教程升级到付费计划。实际用量以自己控制台为准；域名和网络可达性也不由免费额度保证。[官方限制说明](https://developers.cloudflare.com/workers/platform/limits/)
-
-- [Cloudflare：从控制台创建 Worker](https://developers.cloudflare.com/workers/get-started/dashboard/)
-- [Cloudflare：workers.dev 地址](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/)
-- [Cloudflare：运行时密钥](https://developers.cloudflare.com/workers/configuration/secrets/)
-- [Cloudflare：Wrangler 登录与发布](https://developers.cloudflare.com/workers/wrangler/commands/)
-- [Kindlia 网关源码](../workers/kindlia-gateway/src/index.js)
-
-本文控制台图片来自真实操作。Kindle 界面示例使用 KPW5 / 固件 5.17.1 的隔离模拟器；它能验证配置读取、请求与原生页面流程，不能代表各地真实 Kindle 网络的可达性。
+> [!TIP]
+> **连通性测试公共节点（仅供排查与临时体验）**
+> 如果你在配置过程中遇到困难、想先确认 Kindle 本身网络能否连通网关，可临时使用以下测试节点（受 Cloudflare 免费配额限制，每日额度用尽即自动失效，随时可能下线，请勿作为主力阅读配置）：
+> - `gateway_url`：`https://kindlia-gateway.eqnhvhiv2oyds3ajbv5ucrn8ip4t.dpdns.org`
+> - `gateway_key`：`iPxAIGCTowUQgqhNuOE_Xh_fdFpROtkW`
+> 
+> *测试连通正常后，强烈建议按照教程搭建属于自己的专属网关，以获得长期稳定且独享的阅读体验。*
