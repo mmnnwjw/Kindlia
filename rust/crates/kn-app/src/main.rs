@@ -179,7 +179,9 @@ fn device(root: std::path::PathBuf, config: Config) -> Result<(), String> {
     use kn_platform::{Display, FbinkDisplay, GestureConfig, InputReader, PowerMonitor};
     let mut display = FbinkDisplay::open().map_err(|e| e.to_string())?;
     let info = display.info().clone();
-    let upside_down = info.has_gsensor() && std::env::var("KN_ORIENTATION").as_deref() == Ok("D");
+    let orientation = std::env::var("KN_ORIENTATION").unwrap_or_default();
+    let upside_down = info.has_gsensor()
+        && kn_platform::input::startup_upside_down(&info.device_name, &orientation);
     if info.has_gsensor() {
         display.assume_fb_upside_down(upside_down);
         display.set_rotation(kn_platform::Rotation::new(if upside_down { 2 } else { 0 }));
@@ -234,6 +236,10 @@ fn device(_root: std::path::PathBuf, _config: Config) -> Result<(), String> {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|s| s == "--refresh-display") {
+        kn_platform::display::refresh_system_screen().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
     if args.iter().any(|s| s == "--restore-display") {
         #[cfg(target_os = "linux")]
         kn_platform::display::restore_after_crash();

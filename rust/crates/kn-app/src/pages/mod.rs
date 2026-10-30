@@ -16,6 +16,7 @@ pub mod ranks;
 pub mod reader;
 pub mod settings;
 pub mod storage;
+pub mod stats;
 pub mod text;
 
 use crate::Kindlia;

@@ -13,6 +13,7 @@ pub mod paragraphs;
 pub mod progress;
 pub mod repository;
 pub mod sleep;
+pub mod stats;
 pub mod store;
 pub mod tz;
 #[cfg(test)]

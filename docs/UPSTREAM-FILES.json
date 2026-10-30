@@ -1,6 +1,6 @@
 {
   "source": "https://github.com/mmnnwjw/KinNovel",
-  "commit": "3f89ad2953bfda5378d9856aea5bb4c7ebc09265",
+  "commit": "4bcfee767ba0ae3f154c189646d406951bb61f89",
   "native": [
     {
       "name": "FBInk",
@@ -17,7 +17,7 @@
     {
       "path": ".gitignore",
       "source_sha256": "813e54049b061ea1dc9b4194798ff41c8e0d0ebbe1c9d5ae4399884f46d8718b",
-      "current_sha256": "e44b19e79d89f6cb73d2372bea5e882dc5c82bb4f4b844d0f0d010b6756df5f4",
+      "current_sha256": "084b2226c4b764987a064731f2150ca3f1dd3e35cbf5de7f99ee8ec83b8de6e5",
       "modified": true
     },
     {
@@ -29,13 +29,19 @@
     {
       "path": "THIRD-PARTY-NOTICES.md",
       "source_sha256": "d8a5941d13ef6aae4ae43c69f2d76f54c6a7ba2e097b56fcebbe776938b88339",
-      "current_sha256": "dfea4a4fba8f744d70c599f4b8add65b7226eadf29d6048eb0e6b7b954d0500a",
+      "current_sha256": "a16ab61da4e959faeab623cb8ed2756a1da7a40c9415d99b4be9f085641dab15",
       "modified": true
     },
     {
       "path": "config.xml",
-      "source_sha256": "3e71cdd80651477f57deeea140230569491ccc188e5f2faff77ac935ce55f330",
-      "current_sha256": "7e64c454905ce38233e4f98faef4ac59e222bdfd6d815e20a8408e8d90f63592",
+      "source_sha256": "2d9c908152bf79a1ac52f854b8fe748be6e0bc07a8d92c6c17eaedefaef6f612",
+      "current_sha256": "2c8eb0cd56bbb9022d0c720420ad7b82fcd0218967b2cbce706cf5f6d4864463",
+      "modified": true
+    },
+    {
+      "path": "docs/images/shelf.png",
+      "source_sha256": "06c9b3efc8cbf09a1160f52d7597cae9ffe6d7366ca9feddbc9ac91f1db18fae",
+      "current_sha256": "f9a8878ae1e2fb8af522dfe95c6dfe916391443b4990a73bb6f7b5f8e60fb713",
       "modified": true
     },
     {
@@ -52,14 +58,14 @@
     },
     {
       "path": "rust/Cargo.lock",
-      "source_sha256": "4c7c44a22ddf21ee97bc85873303ff8ee75fb170369d206cbdc76ac95c45e93f",
-      "current_sha256": "f50840e3521f2ee03888663470a9aa7b9b5a7be45c79b63519b3ad2d0d734157",
+      "source_sha256": "4c943e88c9667d122e2788bff92c71305cd2c79cd78145e63551b117b3de31a2",
+      "current_sha256": "e5a2f41a27d87e6a85e86f82aab5af4f38b66f03810d8c658eb80100b7825c8b",
       "modified": true
     },
     {
       "path": "rust/Cargo.toml",
-      "source_sha256": "b8b620cae5ced6809ed2d40590d2bc0add0ad581f55d80178fa4db1da3f92d2a",
-      "current_sha256": "219dcb161cb2f78db5ffa1102ac4cb2f373e910fd96508ca9062ed3ffb8d56fb",
+      "source_sha256": "80cf1358dfbc0ca033c0ff7465cdfc107dc5a385f56d0656c332361fee2dc047",
+      "current_sha256": "cbc8164101ee8d9ff1f5bcfba6c71bfb4a53b24cc8b01cf328e26b5633b6004f",
       "modified": true
     },
     {
@@ -106,8 +112,8 @@
     },
     {
       "path": "rust/crates/kn-app/src/main.rs",
-      "source_sha256": "dd72b7aca70c9dcf95236411ad5ca85e944fa969a97321d36f75c446bef3a689",
-      "current_sha256": "f62fe0f631b5d6bc9351666780660241505f35d922f82c16a0b4a33265812850",
+      "source_sha256": "b72e3a3528e3ae84e54dbf89fa3ce252d08d3f187f27ee160279627c75ff9cd9",
+      "current_sha256": "f01a7f9e3ed38ec05c30695bf941ca7443e453711d7f5e20f44ef7d2a33143af",
       "modified": true
     },
     {
@@ -149,25 +155,31 @@
     {
       "path": "rust/crates/kn-app/src/pages/me.rs",
       "source_sha256": "4e7a040e3c35090bad3a5f8b6d1d8178050364f86d7f7afe29f1292a7f3fa49e",
-      "current_sha256": "5874a82d8f9d27524788524dd0fc6dfd807d82f7b512fdf322322900ab7c64a4",
+      "current_sha256": "203584e7ea40f697d2733d57ca59a972d3b6f385f626e5f96294bd3ab73b140f",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/pages/mod.rs",
       "source_sha256": "50af0f889278292eaea0c2af6a8c2f59b07ee24924d05f1eb447e7dd4223479a",
-      "current_sha256": "cd1f3ebc9844bf8dbbba0d85cdd0a4b25bb85d4d4dcb1194df28cc0bb5a0589d",
+      "current_sha256": "1a7db401054f7d99e494b19d2d0948361c6aba5e72ba8a91d8a99d41874ded58",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/pages/reader.rs",
       "source_sha256": "003d29552862145619df97e6a518606c8f977e5c5094a63b843edee8672c260a",
-      "current_sha256": "a1d7c68ea1b14ff83e598f0853da3249d51a55c29b8d1357259a3bebc543aa99",
+      "current_sha256": "6d1921b6e440864781fbe5dc2ab005b088432d3567116c6012f85443d0fdbeee",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/pages/settings.rs",
       "source_sha256": "d0bdf539f84002ed0bd337c5e2837727b0ec0e9df502248f53b2fa132c1e6460",
-      "current_sha256": "f3cb983cfa11a5143647c2a5409c28f6cce8a0ad6f8dc9fa1cbe98362f07dfdd",
+      "current_sha256": "12f85e53fd56fb3b43046584427f1b84e222a49a7c0113d040ef0ea4da2d3a2d",
+      "modified": true
+    },
+    {
+      "path": "rust/crates/kn-app/src/pages/stats.rs",
+      "source_sha256": "b475589d9ecbf0a68c5ab03fe6b480ad2e1794606b114767a5aca5bff73006e7",
+      "current_sha256": "63ffb957ea12c447cadc781e5d68e8ef678890b4ef669a75bdf5271356148b98",
       "modified": true
     },
     {
@@ -178,14 +190,20 @@
     },
     {
       "path": "rust/crates/kn-app/src/sleep.rs",
-      "source_sha256": "4f68bb5c76e63dd51db463e962a98aba62ed52e9bbe0c2695ad206f6ebade29e",
+      "source_sha256": "e099c9d9bfa5cc14d5866b6ef016e12fc7ae00243667b6f26f22f211c8c50829",
       "current_sha256": "3bb341ad4341b58aba70398ef95f54f841a44561ce882cd80f0454f52de3075f",
+      "modified": true
+    },
+    {
+      "path": "rust/crates/kn-app/src/stats.rs",
+      "source_sha256": "b1af670938aa6cfb7b7225fb5669b2df10482c722b2c450e70ee49a2f286a1e7",
+      "current_sha256": "012e8263b8053310451a18143293328008f362f38e8b8a6fe404f93d5f37535b",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/store.rs",
       "source_sha256": "f89f2988e9a3bb7d9d5794b68938f703609cc9bd1165c188fd6f8db00ea651d7",
-      "current_sha256": "6da228a9b1864e36a7114fcb0b8ac2368ee263ce6c3d7d87cabe462eaafa05fa",
+      "current_sha256": "b455ce729d92dade5f12571a0c85b9c02c77fb23031aa7be06d89331a7954d69",
       "modified": true
     },
     {
@@ -328,8 +346,8 @@
     },
     {
       "path": "rust/crates/kn-platform/src/display.rs",
-      "source_sha256": "b649fa11d2eb35370684f3b359247be86e81afce7edf60ef97ba029f60f21dcd",
-      "current_sha256": "32d382c27b96c5e79e616601b5af784c7c1f095c3ff81bfca19f5ddd4d007e11",
+      "source_sha256": "cbe5e93ace5fb2b2dfabffea5a3a554f098c3b1a6cfe94bfb2e97b471a45815e",
+      "current_sha256": "2e178d9b65f67d6aceec0b5082064ffc1fbb1d741a86f457d55d76046c1a1300",
       "modified": true
     },
     {
@@ -346,8 +364,8 @@
     },
     {
       "path": "rust/crates/kn-platform/src/input.rs",
-      "source_sha256": "099b98f0ca7b5debae1a21f59f1961fd21a062d1d31967211d2143224e511671",
-      "current_sha256": "099b98f0ca7b5debae1a21f59f1961fd21a062d1d31967211d2143224e511671",
+      "source_sha256": "f18e4ed977f332f54507ab39e757246f9f15d4292d1edf5ce0eafdff42865bd8",
+      "current_sha256": "f18e4ed977f332f54507ab39e757246f9f15d4292d1edf5ce0eafdff42865bd8",
       "modified": false
     },
     {
@@ -370,8 +388,8 @@
     },
     {
       "path": "rust/crates/kn-platform/src/power.rs",
-      "source_sha256": "0cb77562dfc7b554802c4bc7e46663ee8eae9c8fc5388c16a4e366e6befeb58d",
-      "current_sha256": "2cffe19b9e130a2dd869181671fa5cbf45c3d6b1fd58df4f64716225ec1a1dfc",
+      "source_sha256": "bb14f022f5853fecefddcf5aa608982f99e4bee48ee3502da472a6884cf4c2a7",
+      "current_sha256": "0b0f6087ee8a2a39a118c9c7667dadcfd8c6aea7a5d3f2d51a2721f510dbb1cc",
       "modified": true
     },
     {
@@ -580,8 +598,8 @@
     },
     {
       "path": "rust/crates/kn-ui/src/app.rs",
-      "source_sha256": "b3c537e36cd7be2593cd85dce932437ee29d2e3151b947aee12c32a2401dc6ea",
-      "current_sha256": "5ccd83c4dbede205588c687e7f00981db2531f5e1e43e2f5eaf32c3739dad008",
+      "source_sha256": "3e2dcaf9da0825dac43282aab6d893e29e972c30d6acff7b314972703a4c8f09",
+      "current_sha256": "c89eaa7c7b5553a764db7ca7fc42cd19cccc390192472507db775182458b5ed3",
       "modified": true
     },
     {
@@ -635,7 +653,7 @@
     {
       "path": "tools/package_release.py",
       "source_sha256": "1b97b021b7e33c916bdff64764d740ee1756fecdc138c967f64fc25c83c44e19",
-      "current_sha256": "60e98fc5c3f65e84325639594689f37453fccd76b9c08165000be1082a87967d",
+      "current_sha256": "518743d84d808dccb4f9c533961fb5c3c19069124b7bcfb6d28121fd7a32358c",
       "modified": true
     },
     {

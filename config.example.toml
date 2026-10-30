@@ -5,8 +5,9 @@ timeout_secs = 30
 strict_tls = true
 offline = false
 font_size = 48
-line_spacing = 1.42
-paragraph_spacing = 0.22
+line_spacing = 1.4
+# 按基础行高增加段后留白；0 为不额外增加，EPUB 自带外边距仍保留。
+paragraph_spacing = 0.1
 first_line_indent = true
 margin = 34
 translation = "auto" # auto, sakura, gpt, youdao, baidu

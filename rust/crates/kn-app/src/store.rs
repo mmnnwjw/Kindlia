@@ -119,7 +119,7 @@ impl Default for Config {
             strict_tls: true,
             offline: false,
             font_size: 48,
-            line_spacing: 1.42,
+            line_spacing: 1.4,
             margin: 34,
             reading_mode: ReadingMode::Auto,
             landscape: false,
@@ -131,7 +131,7 @@ impl Default for Config {
             reader_font: String::new(),
             auth_base_url: "https://auth.novelia.cc".into(),
             forum_base_url: "https://forum.novelia.cc".into(),
-            paragraph_spacing: 0.22,
+            paragraph_spacing: 0.1,
             first_line_indent: true,
             welcome_skipped: false,
             page_turn_animation: true,
@@ -181,7 +181,8 @@ impl Config {
         }
         config.api_base_url = normalize_base(&config.api_base_url)?;
         config.font_size = config.font_size.clamp(24, 96);
-        config.line_spacing = config.line_spacing.clamp(1.0, 2.5);
+        config.line_spacing = config.line_spacing.clamp(1.0, 2.0);
+        config.paragraph_spacing = config.paragraph_spacing.clamp(0.0, 2.0);
         config.margin = config.margin.clamp(8, 120);
         Ok(config)
     }

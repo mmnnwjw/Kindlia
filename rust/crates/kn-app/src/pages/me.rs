@@ -90,7 +90,7 @@ impl Page<Kindlia> for MePage {
             );
         }
         let start = y + m.row_h() + m.touch + m.margin / 2;
-        for (i, t) in ["设置", "存储空间", "关于 Kindlia", "退出应用"]
+        for (i, (t, id)) in [("阅读统计", 24), ("设置", 20), ("存储空间", 21), ("关于 Kindlia", 22), ("退出应用", 23)]
             .iter()
             .enumerate()
         {
@@ -101,7 +101,7 @@ impl Page<Kindlia> for MePage {
                 t,
                 "",
                 "",
-                Some(20 + i as u32),
+                Some(*id),
             );
         }
         let status = if self.notice.is_empty() {
@@ -181,7 +181,7 @@ impl Page<Kindlia> for MePage {
         if let Some(t) = tab_input(cx, e, 3) {
             return t;
         }
-        match hit(cx,e){Some(10)=>return Transition::Push(Box::new(login::LoginPage::new())),Some(11)=>return Transition::Push(Box::new(login::LoginPage::new())),Some(12)if !self.busy=>{let username=self.username.clone();let password=self.password.text();self.password.set_text("");let api=cx.app.repo.api.clone();self.busy=true;cx.spawn(move||LoginResult(api.login(&username,&password)));},Some(13)if !self.busy=>{let api=cx.app.repo.api.clone();self.busy=true;cx.spawn(move||LoginResult(api.logout()));},Some(20)=>return Transition::Push(Box::new(settings::SettingsPage::new(cx.app))),Some(21)=>return Transition::Push(Box::new(storage::StoragePage::default())),Some(22)=>return Transition::Push(Box::new(text::TextPage::new("关于 Kindlia",concat!("Kindlia ",env!("CARGO_PKG_VERSION"),"\nAutoNovel 原生 Kindle 客户端\n账号注册、找回密码请使用 auth.novelia.cc\n自定义字体放入 /mnt/us/extensions/kindlia/fonts\nGPL-3.0-or-later\n基于 KinNovel，保留原作者许可。")))),Some(23)=>return Transition::Exit,_=>{}}
+        match hit(cx,e){Some(10)=>return Transition::Push(Box::new(login::LoginPage::new())),Some(11)=>return Transition::Push(Box::new(login::LoginPage::new())),Some(12)if !self.busy=>{let username=self.username.clone();let password=self.password.text();self.password.set_text("");let api=cx.app.repo.api.clone();self.busy=true;cx.spawn(move||LoginResult(api.login(&username,&password)));},Some(13)if !self.busy=>{let api=cx.app.repo.api.clone();self.busy=true;cx.spawn(move||LoginResult(api.logout()));},Some(20)=>return Transition::Push(Box::new(settings::SettingsPage::new(cx.app))),Some(21)=>return Transition::Push(Box::new(storage::StoragePage::default())),Some(22)=>return Transition::Push(Box::new(text::TextPage::new("关于 Kindlia",concat!("Kindlia ",env!("CARGO_PKG_VERSION"),"\nAutoNovel 原生 Kindle 客户端\n账号注册、找回密码请使用 auth.novelia.cc\n自定义字体放入 /mnt/us/extensions/kindlia/fonts\nGPL-3.0-or-later\n基于 KinNovel，保留原作者许可。")))),Some(24)=>return Transition::Push(Box::new(stats::StatsPage::default())),Some(23)=>return Transition::Exit,_=>{}}
         cx.request_redraw(RefreshHint::Ui);
         Transition::None
     }

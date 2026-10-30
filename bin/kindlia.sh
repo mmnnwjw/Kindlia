@@ -9,6 +9,13 @@ PAUSE_LIST=/tmp/kindlia_paused_pids
 LOCK_DIR=/tmp/kindlia.lock
 BIN_RUN=/tmp/kindlia-bin
 GRAYSCALE_MARKER=/tmp/kindlia_grayscale
+FB_BACKUP=/tmp/kindlia-fb.dump
+SLEEP_COVER=0
+SCREENSAVER_MODULE=
+PILLOW_DISABLED=0
+STATUSBAR_STOPPED=0
+DISPLAY_TAKEN=0
+CLEANED=0
 mkdir -p "$LOG_DIR" || exit 1
 LOG_FILE="$LOG_DIR/kindlia.log"
 log() { echo "[launcher] $*" >> "$LOG_FILE"; }
@@ -40,10 +47,35 @@ resume_fb_users() {
     done < "$PAUSE_LIST"
     rm -f "$PAUSE_LIST"
 }
+restore_screensaver() {
+    [ -n "$SCREENSAVER_MODULE" ] || return 0
+    if lipc-set-prop com.lab126.blanket load "$SCREENSAVER_MODULE" >> "$LOG_FILE" 2>&1; then
+        SCREENSAVER_MODULE=
+    else
+        log "cannot restore $SCREENSAVER_MODULE"
+    fi
+}
 cleanup() {
+    [ "$CLEANED" = 1 ] && return 0
+    CLEANED=1
+    # Restore the saved native frame while its writers are still paused.
+    if [ "$DISPLAY_TAKEN" = 1 ] && [ -f "$FB_BACKUP" ]; then
+        cat "$FB_BACKUP" > /dev/fb0 2>> "$LOG_FILE" || log "cannot restore framebuffer"
+        rm -f "$FB_BACKUP"
+    fi
     resume_fb_users
-    [ "$SLEEP_COVER" = 1 ] && lipc-set-prop com.lab126.blanket load screensaver >/dev/null 2>&1
-    lipc-set-prop com.lab126.appmgrd start app://com.lab126.booklet.home >/dev/null 2>&1 || true
+    if [ "$PILLOW_DISABLED" = 1 ]; then
+        lipc-set-prop com.lab126.pillow disableEnablePillow enable >> "$LOG_FILE" 2>&1 || log "cannot enable pillow"
+    elif [ "$PILLOW_DISABLED" = 2 ]; then
+        lipc-set-prop com.lab126.pillow interrogatePillow '{"pillowId":"default_status_bar","function":"nativeBridge.showMe();"}' >> "$LOG_FILE" 2>&1 || log "cannot show status bar"
+    fi
+    if [ "$STATUSBAR_STOPPED" = 1 ]; then
+        start statusbar >> "$LOG_FILE" 2>&1 || log "cannot start statusbar"
+    fi
+    restore_screensaver
+    lipc-set-prop com.lab126.appmgrd start app://com.lab126.booklet.home >> "$LOG_FILE" 2>&1 || log "cannot start home"
+    usleep 250000 2>/dev/null || sleep 1
+    [ "$DISPLAY_TAKEN" = 1 ] && "$BIN_RUN" --refresh-display >> "$LOG_FILE" 2>&1
     rm -f "$BIN_RUN" "$LOCK_DIR/pid"
     rmdir "$LOCK_DIR" 2>/dev/null || true
 }
@@ -61,9 +93,30 @@ resume_fb_users
 SLEEP_COVER=0
 if grep -q '^sleep_cover *= *true' "$KINDLIA_HOME/config.toml" 2>/dev/null; then
     case "$(lipc-get-prop com.lab126.blanket load 2>/dev/null)" in
-        *ad_screensaver*) log "keeping special offers screensaver" ;;
-        *screensaver*) lipc-set-prop com.lab126.blanket unload screensaver 2>/dev/null && SLEEP_COVER=1 ;;
+        *ad_screensaver*) SCREENSAVER_MODULE=ad_screensaver ;;
+        *screensaver*) SCREENSAVER_MODULE=screensaver ;;
     esac
+    if [ -n "$SCREENSAVER_MODULE" ]; then
+        if lipc-set-prop com.lab126.blanket unload "$SCREENSAVER_MODULE" >> "$LOG_FILE" 2>&1; then
+            SLEEP_COVER=1
+        else
+            log "cannot unload $SCREENSAVER_MODULE"
+            SCREENSAVER_MODULE=
+        fi
+    fi
+fi
+if [ "$SLEEP_COVER" = 1 ]; then
+    FW_VERSION=$(awk '/^Kindle 5[.]/ { split($2, v, "."); print v[1]*1000000+v[2]*1000+v[3]; exit }' /etc/prettyversion.txt 2>/dev/null)
+    if [ -n "$FW_VERSION" ] && [ "$FW_VERSION" -lt 5006005 ]; then
+        if lipc-set-prop com.lab126.pillow interrogatePillow '{"pillowId":"default_status_bar","function":"nativeBridge.hideMe();"}' >> "$LOG_FILE" 2>&1; then
+            PILLOW_DISABLED=2
+        fi
+    elif lipc-set-prop com.lab126.pillow disableEnablePillow disable >> "$LOG_FILE" 2>&1; then
+        PILLOW_DISABLED=1
+    fi
+    if [ -f /etc/upstart/statusbar.conf ] && initctl status statusbar 2>/dev/null | grep -q 'start/running'; then
+        if stop statusbar >> "$LOG_FILE" 2>&1; then STATUSBAR_STOPPED=1; fi
+    fi
 fi
 export KINDLIA_SLEEP_COVER=$SLEEP_COVER
 cp "$SCRIPT_DIR/kindlia" "$BIN_RUN" && chmod +x "$BIN_RUN" || { log "cannot stage binary"; exit 1; }
@@ -78,7 +131,13 @@ for pid in $(ls -l /proc/[0-9]*/fd/ 2>/dev/null | awk '
     [ "$pid" -ne $$ ] || continue
     if kill -STOP "$pid" 2>/dev/null; then echo "$pid" >> "$PAUSE_LIST"; fi
 done
+DISPLAY_TAKEN=1
 usleep 200000 2>/dev/null || sleep 1
+rm -f "$FB_BACKUP"
+if ! cat /dev/fb0 > "$FB_BACKUP" 2>> "$LOG_FILE"; then
+    log "cannot save framebuffer"
+    rm -f "$FB_BACKUP"
+fi
 log "starting Kindlia"
 "$BIN_RUN" "$@" >> "$LOG_FILE" 2>&1
 RET=$?

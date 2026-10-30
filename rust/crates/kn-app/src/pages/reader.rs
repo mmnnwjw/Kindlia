@@ -101,8 +101,38 @@ pub struct ReaderPage {
     target_seen: bool,
     bitmap_style: String,
     rich: bool,
+    tracker: crate::stats::Tracker,
+    stats_key: Option<String>,
 }
 impl ReaderPage {
+    fn stats_book(&mut self, cx: &Cx<Kindlia>) -> (String, String) {
+        let id = self.stats_key.get_or_insert_with(|| {
+            let source = (self.key.provider_id == "epub")
+                .then(|| cx.app.repo.store.read_cache::<serde_json::Value>("epub-source", &self.key))
+                .flatten();
+            let key = source.as_ref().and_then(|v| v["novel"].as_str())
+                .map(|id| NovelKey { provider_id: "wenku".into(), novel_id: id.into() })
+                .unwrap_or_else(|| self.key.clone());
+            crate::model::digest(&key)
+        }).clone();
+        let title = self.novel.as_ref().map(|n| n.title().to_owned())
+            .or_else(|| self.chapter.as_ref().and_then(|c| {
+                c.novel_title_zh.as_ref().filter(|s| !s.is_empty()).or(c.novel_title_jp.as_ref()).cloned()
+            })).unwrap_or_else(|| self.key.novel_id.clone());
+        (id, title)
+    }
+    fn stop_tracking(&mut self, cx: &Cx<Kindlia>) {
+        if self.tracker.is_running() {
+            let (id, title) = self.stats_book(cx);
+            self.tracker.stop(&cx.app.repo.store, &id, &title, false);
+        }
+    }
+    fn start_tracking(&mut self) {
+        if self.chapter.is_some() && !self.pages.is_empty() && self.target.is_none()
+            && !self.loading && self.font_loading.is_none() {
+            self.tracker.start();
+        }
+    }
     fn page_label(&self) -> String {
         format!(
             "{} / {}{}",
@@ -669,9 +699,12 @@ impl ReaderPage {
             target_seen: false,
             bitmap_style: String::new(),
             rich: false,
+            tracker: crate::stats::Tracker::default(),
+            stats_key: None,
         }
     }
     fn load(&mut self, cx: &mut Cx<Kindlia>, refresh: bool) {
+        self.stop_tracking(cx);
         self.load_started = Some(std::time::Instant::now());
         self.generation += 1;
         self.loading = true;
@@ -790,6 +823,7 @@ impl ReaderPage {
         }
     }
     fn rebuild(&mut self, cx: &mut Cx<Kindlia>) {
+        self.stop_tracking(cx);
         self.save(cx);
         if self.target.is_none() {
             self.target = self.anchor();
@@ -874,6 +908,7 @@ impl ReaderPage {
             let cached = name.is_empty() || cx.app.reader_font_cache.as_ref().is_some_and(|(n, _)| *n == name);
             if !cached {
                 if self.font_loading.as_ref() != Some(&name) {
+                    self.stop_tracking(cx);
                     self.font_loading = Some(name.clone());
                     let root = cx.app.repo.store.root.clone();
                     cx.spawn_local_droppable(move || {
@@ -1004,6 +1039,7 @@ impl ReaderPage {
         if id == self.chapter_id && self.chapter.is_some() {
             return;
         }
+        self.stop_tracking(cx);
         self.save(cx);
         self.sync_history(cx);
         let signature = page_signature(cx);
@@ -1067,6 +1103,7 @@ impl ReaderPage {
         if self.target.is_some() {
             return;
         }
+        let previous = self.index;
         if forward && self.index + 1 < self.pages.len() {
             self.index += 1;
         } else if !forward && self.index > 0 {
@@ -1076,6 +1113,10 @@ impl ReaderPage {
                 self.change_chapter(cx, id);
                 return;
             }
+        }
+        if self.index != previous {
+            let (id, title) = self.stats_book(cx);
+            self.tracker.page(&cx.app.repo.store, &id, &title, false);
         }
         kn_platform::display::set_swipe_steps(cx.app.config.swipe_steps.clamp(6, 60));
         cx.request_turn(cx.app.config.page_turn_animation.then_some(if forward {
@@ -1168,11 +1209,12 @@ impl ReaderPage {
                         );
                         let key = format!("{url}|{width}x{height}");
                         if let Some(ImageSlot::Ready(image)) = self.images.get(&key) {
+                            let actual = image_rect(image, rect);
                             frame.blit(
                                 image,
                                 image.bounds(),
-                                rect.x + (rect.w.saturating_sub(image.width()) / 2) as i32,
-                                rect.y + (rect.h.saturating_sub(image.height()) / 2) as i32,
+                                actual.x,
+                                actual.y,
                             );
                         } else {
                             label(
@@ -1344,10 +1386,12 @@ impl Page<Kindlia> for ReaderPage {
         }
     }
     fn leave(&mut self, cx: &mut Cx<Kindlia>) {
+        self.stop_tracking(cx);
         self.save(cx);
         self.sync_history(cx);
     }
     fn on_suspend(&mut self, cx: &mut Cx<Kindlia>) {
+        self.stop_tracking(cx);
         self.save(cx);
         self.sync_history(cx);
     }
@@ -1375,8 +1419,14 @@ impl Page<Kindlia> for ReaderPage {
         }
         if let Some(items) = self.pages.get(self.index) {
             for (position,item) in items.iter().enumerate() {
-                if let PageItem::Image{x,y,width,height,..}=item {
-                    cx.hits.add(HitId(800_000+position as u32),Rect::new(*x as i32,*y as i32+content_top as i32,*width as u32,*height as u32)).no_feedback();
+                if let PageItem::Image{url,x,y,width,height,..}=item {
+                    let area = Rect::new(*x as i32, *y as i32 + content_top as i32, *width as u32, *height as u32);
+                    if let Some(ImageSlot::Ready(image)) = self.images.get(&format!("{url}|{width}x{height}")) {
+                        let visible = Rect::new(0, content_top as i32, cx.width, cx.height.saturating_sub(content_top));
+                        if let Some(actual) = image_rect(image, area).intersect(&visible) {
+                            cx.hits.add(HitId(800_000 + position as u32), actual).no_feedback();
+                        }
+                    }
                 }
                 if let PageItem::Note {
                     index,
@@ -1400,6 +1450,7 @@ impl Page<Kindlia> for ReaderPage {
                 }
             }
         }
+        self.start_tracking();
         self.draw_header(cx, frame, content_top as i32);
         if self.menu || (self.chapter.is_none() && !self.loading) {
             self.draw_chrome(cx, frame);
@@ -1627,6 +1678,11 @@ impl Page<Kindlia> for ReaderPage {
             return Transition::None;
         }
         if let Some(id)=hit(cx,event).filter(|id|*id>=800_000) {
+            // A tap must both begin and end on this rendered image; crossing
+            // the letterbox boundary while releasing must not open a preview.
+            if !matches!(event, InputEvent::Gesture(g) if cx.hits.at(kn_render::Point { x: g.start.0, y: g.start.1 }) == Some(HitId(id))) {
+                return Transition::None;
+            }
             if let Some(PageItem::Image{url,height,..})=self.pages.get(self.index).and_then(|p|p.get((id-800_000) as usize)) {
                 return Transition::Push(Box::new(super::image::ImagePage::new(url.clone(),*height as u32)));
             }
@@ -1700,11 +1756,13 @@ impl Page<Kindlia> for ReaderPage {
                 self.loading = false;
                 match r.1 {
                     Ok(key) => {
+                        self.stop_tracking(cx);
                         self.save(cx);
                         let anchor = self.anchor();
                         self.chapter_cache.clear();
                         self.prefetched.clear();
                         self.key = key;
+                        self.stats_key = None;
                         self.bookmarks = cx.app.repo.store.bookmarks(&self.key);
                         self.novel = None;
                         self.document = None;
@@ -1803,6 +1861,15 @@ impl Page<Kindlia> for ReaderPage {
             }
         }
     }
+}
+
+// Use exactly the same centering and bitmap dimensions for painting and hits.
+fn image_rect(image: &Bitmap, area: Rect) -> Rect {
+    Rect::new(
+        area.x + (area.w.saturating_sub(image.width()) / 2) as i32,
+        area.y + (area.h.saturating_sub(image.height()) / 2) as i32,
+        image.width(), image.height(),
+    )
 }
 
 fn ribbon(frame: &mut Bitmap, r: Rect, filled: bool, line: f32, color: u8) {

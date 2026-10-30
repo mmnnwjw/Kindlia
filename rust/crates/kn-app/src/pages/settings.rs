@@ -53,7 +53,7 @@ fn fields(group: usize) -> &'static [(Field, &'static str)] {
     match group {
         0 => &[
             (FontSize, "正文字号"),
-            (Line, "行距"),
+            (Line, "行高"),
             (Paragraph, "段间距"),
             (Margin, "页边距"),
             (Indent, "首行缩进"),
@@ -125,8 +125,8 @@ impl SettingsPage {
         use Field::*;
         match field {
             FontSize => self.draft.font_size.to_string(),
-            Line => format!("{:.1}", self.draft.line_spacing),
-            Paragraph => format!("{:.1}", self.draft.paragraph_spacing),
+            Line => format!("{:.2}", self.draft.line_spacing),
+            Paragraph => format!("{:.2}", self.draft.paragraph_spacing),
             Margin => self.draft.margin.to_string(),
             Indent => on(self.draft.first_line_indent),
             Night => on(self.draft.night),
@@ -202,8 +202,8 @@ impl SettingsPage {
         Some(match f {
             CacheLimit => (self.draft.cache_limit_mb as f64, 64., 1024., 64.),
             FontSize => (self.draft.font_size as f64, 28., 80., 4.),
-            Line => (self.draft.line_spacing, 1.2, 2.2, 0.1),
-            Paragraph => (self.draft.paragraph_spacing, 0., 1.5, 0.1),
+            Line => (self.draft.line_spacing, 1.0, 2.0, 0.05),
+            Paragraph => (self.draft.paragraph_spacing, 0., 2.0, 0.05),
             Margin => (self.draft.margin as f64, 16., 96., 8.),
             Steps => (self.draft.swipe_steps as f64, 6., 60., 6.),
             Refresh => (self.draft.full_refresh_every as f64, 2., 12., 1.),
@@ -516,8 +516,8 @@ impl Page<Kindlia> for SettingsPage {
                             (v + if (id - 100) % 4 == 0 { -step } else { step }).clamp(min, max);
                         match field {
                             FontSize => self.draft.font_size = value.round() as u32,
-                            Line => self.draft.line_spacing = value,
-                            Paragraph => self.draft.paragraph_spacing = value,
+                            Line => self.draft.line_spacing = (value * 100.0).round() / 100.0,
+                            Paragraph => self.draft.paragraph_spacing = (value * 100.0).round() / 100.0,
                             Margin => self.draft.margin = value.round() as u32,
                             Steps => self.draft.swipe_steps = value.round() as u8,
                             Refresh => self.draft.full_refresh_every = value.round() as u8,
