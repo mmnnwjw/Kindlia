@@ -4,7 +4,8 @@ Kindlia is derived from [KinNovel](https://github.com/mmnnwjw/KinNovel) at
 `3f89ad2953bfda5378d9856aea5bb4c7ebc09265`. Original code attribution and license
 notices are retained. Kindlia is distributed under GPL-3.0-or-later; see LICENSE.
 The original upstream notice is preserved in
-[docs/UPSTREAM-THIRD-PARTY-NOTICES.md](docs/UPSTREAM-THIRD-PARTY-NOTICES.md).
+[docs/UPSTREAM-THIRD-PARTY-NOTICES.md](https://github.com/mmnnwjw/Kindlia/blob/main/docs/UPSTREAM-THIRD-PARTY-NOTICES.md).
+Binary packages include this notice at `licenses/UPSTREAM-THIRD-PARTY-NOTICES.md`.
 That document records KinNovel's components and fonts; components absent from
 Kindlia are not implied to be distributed here.
 

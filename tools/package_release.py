@@ -31,19 +31,12 @@ with zipfile.ZipFile(args.output, 'w', zipfile.ZIP_DEFLATED) as out:
         (root / 'config.xml', 'kindlia/config.xml'),
         (root / 'menu.json', 'kindlia/menu.json'),
         (root / 'config.example.toml', 'kindlia/config.example.toml'),
-        (root / 'README.md', 'kindlia/README.md'),
         (root / 'LICENSE', 'kindlia/LICENSE'),
         (root / 'THIRD-PARTY-NOTICES.md', 'kindlia/THIRD-PARTY-NOTICES.md'),
-        (root / 'docs/UPSTREAM-THIRD-PARTY-NOTICES.md', 'kindlia/docs/UPSTREAM-THIRD-PARTY-NOTICES.md'),
-        (root / 'docs/GATEWAY.md', 'kindlia/docs/GATEWAY.md'),
+        (root / 'docs/UPSTREAM-THIRD-PARTY-NOTICES.md', 'kindlia/licenses/UPSTREAM-THIRD-PARTY-NOTICES.md'),
         (root / 'rust/crates/kn-ime/data/LICENSE-rime-pinyin-simp', 'kindlia/licenses/LICENSE-rime-pinyin-simp'),
         (root / 'rust/third_party/libwebp/COPYING', 'kindlia/licenses/libwebp-COPYING'),
         (root / 'rust/third_party/libwebp/PATENTS', 'kindlia/licenses/libwebp-PATENTS'),
     ]:
         out.write(source, target)
-    # Keep the illustrated setup guide readable in an extracted release package.
-    for source in sorted((root / 'docs/images/gateway').iterdir()):
-        if source.suffix.lower() not in ('.jpg', '.png'):
-            continue
-        out.write(source, 'kindlia/docs/images/gateway/' + source.name)
 print(args.output.resolve())

@@ -7,6 +7,15 @@ Novelia（轻小说机翻机器人）Kindle 原生客户端，基于 [KinNovel](
 [![Platform](https://img.shields.io/badge/platform-Kindle%20(ARMv7%20Linux)-orange.svg)]()
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-lightgrey.svg)]()
 
+<p align="center">
+  <img src="docs/images/shelf.png" width="23%" alt="书架：继续阅读与云端收藏夹">
+  <img src="docs/images/discover.png" width="23%" alt="发现：在线网络小说列表">
+  <img src="docs/images/reader.png" width="23%" alt="阅读器：译文排版与首行缩进">
+  <img src="docs/images/reader-menu.png" width="23%" alt="阅读菜单：目录、进度与阅读调节">
+</p>
+
+以上为 KPW5（固件 5.17.1）模拟器中的实际运行截图。
+
 [功能特性](#功能特性) • [安装与部署](#安装与使用) • [配置说明](#配置与个性化) • [反代网关](#可选-cloudflare-worker-反代) • [编译打包](#编译与打包) • [许可与说明](#开源许可与说明)
 
 ---
@@ -110,7 +119,7 @@ forum_base_url = "https://forum.novelia.cc" # 仅用于书籍评论
 font_size = 48                              # 正文字号
 line_spacing = 1.42                         # 行间距
 paragraph_spacing = 0.22                    # 段间距
-first_line_indent = false                   # 首行缩进
+first_line_indent = true                    # 首行缩进（默认开启）
 margin = 34                                 # 页边距
 reader_font = ""                            # 字体文件名（空为系统默认）
 convert = ""                                # 简繁转换："" (关) / "t2s" (繁转简) / "s2t" (简转繁)
@@ -181,7 +190,7 @@ gateway_key = ""                            # 与 Worker 部署一致的私密�
 cd ..
 python tools/package_release.py
 ```
-执行后将在 `dist/` 目录下生成 `kindlia-1.0.0.zip`，可直接部署至设备。
+执行后将在 `dist/` 目录下生成 `kindlia-1.0.0.zip`，可直接部署至设备。分发包仅包含运行文件、配置模板与许可证；使用说明和图文教程请查看本仓库。
 
 ---
 

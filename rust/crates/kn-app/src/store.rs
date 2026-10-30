@@ -132,7 +132,7 @@ impl Default for Config {
             auth_base_url: "https://auth.novelia.cc".into(),
             forum_base_url: "https://forum.novelia.cc".into(),
             paragraph_spacing: 0.22,
-            first_line_indent: false,
+            first_line_indent: true,
             welcome_skipped: false,
             page_turn_animation: true,
             swipe_steps: 12,
