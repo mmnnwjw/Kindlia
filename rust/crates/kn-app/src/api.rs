@@ -75,6 +75,7 @@ pub struct ApiClient {
     timeout: Duration,
     strict_tls: bool,
     limit: Arc<RateLimit>,
+    image_limit: Arc<RateLimit>,
 }
 impl ApiClient {
     pub fn new(base: &str, timeout_secs: u64, strict_tls: bool) -> Result<Self, String> {
@@ -88,6 +89,7 @@ impl ApiClient {
             timeout: Duration::from_secs(timeout_secs.clamp(3, 120)),
             strict_tls,
             limit: Arc::new(RateLimit::new(4, Duration::from_secs(1))),
+            image_limit: Arc::new(RateLimit::new(2, Duration::from_secs(1))),
         })
     }
     /// Capture the submitting account for background writes; never overwrite a later login's session file.
@@ -288,7 +290,7 @@ impl ApiClient {
         ))
     }
     pub fn image(&self, url: &str) -> Result<Vec<u8>, String> {
-        self.limit.wait();
+        self.image_limit.wait();
         let url = self.transport_url(url, true)?;
         http::download_resumable_headers(
             &url,

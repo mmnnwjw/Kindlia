@@ -3,11 +3,13 @@ from pathlib import Path
 import argparse
 import zipfile
 import struct
+import tomllib
+version = tomllib.loads((Path(__file__).resolve().parents[1] / "rust/Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--binary', type=Path, default=root / 'rust/target/armv7-unknown-linux-musleabihf/release/kindlia')
-parser.add_argument('--output', type=Path, default=root / 'dist/kindlia-1.0.0.zip')
+parser.add_argument('--output', type=Path, default=root / f'dist/kindlia-{version}.zip')
 args = parser.parse_args()
 launcher = (root / 'bin/kindlia.sh').read_bytes()
 if b'\r' in launcher:

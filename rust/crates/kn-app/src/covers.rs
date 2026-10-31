@@ -20,9 +20,10 @@ pub fn image(repo: &Repository, url: &str, size: (u32, u32)) -> Result<Bitmap, S
     repo.image(url, size).or_else(|_| fallback(size))
 }
 pub fn remember(repo: &Repository, key: &NovelKey, author: String, cover: String) {
-    let _ = repo
-        .store
-        .write_cache("book-meta", key, &Metadata { author, cover });
+    let prior = repo.store.read_cache::<Metadata>("book-meta", key).unwrap_or_default();
+    let author = if author.is_empty() { prior.author } else { author };
+    let cover = if cover.is_empty() { prior.cover } else { cover };
+    let _ = repo.store.write_cache("book-meta", key, &Metadata { author, cover });
 }
 pub fn metadata(repo: &Repository, key: &NovelKey, network: bool) -> Metadata {
     if let Some(meta) = repo.store.read_cache("book-meta", key) {
@@ -109,4 +110,21 @@ pub fn metadata(repo: &Repository, key: &NovelKey, network: bool) -> Metadata {
 }
 pub fn for_book(repo: &Repository, key: &NovelKey, size: (u32, u32)) -> Result<Bitmap, String> {
     image(repo, &metadata(repo, key, true).cover, size)
+}
+
+/// Metadata lookup and original-byte download are separated from local image decoding.
+pub fn spawn<M:std::any::Any+Send>(cx:&kn_ui::Cx<crate::Kindlia>,key:NovelKey,size:(u32,u32),finish:impl FnOnce(Metadata,Result<Bitmap,String>)->M+Send+'static) {
+ let repo=cx.app.repo.clone();let Some(spawner)=cx.spawner() else{return;};let worker=spawner.clone();
+ worker.spawn_on(kn_ui::Lane::Local,true,move || {
+  let meta=metadata(&repo,&key,false);
+  let decode=move |meta:Metadata,spawner:kn_ui::Spawner<crate::Kindlia>,repo:Repository| {
+   let url=meta.cover.clone();
+   crate::images::spawn_on(spawner,repo,url,move |bytes| {
+    let result=bytes.and_then(|b|b.decode(Some(size),kn_render::image::ImageBudget::Normal).map(|b|b.fit_within(size.0,size.1)).map_err(|e|e.to_string())).or_else(|_|fallback(size));finish(meta,result)
+   });
+  };
+  if meta.cover.is_empty() && !repo.offline {
+   let local=spawner.clone();spawner.spawn_on(kn_ui::Lane::Media,true,move || {let meta=metadata(&repo,&key,true);decode(meta,local,repo);});
+  } else {decode(meta,spawner,repo);}
+ });
 }

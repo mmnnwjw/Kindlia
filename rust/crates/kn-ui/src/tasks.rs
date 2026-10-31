@@ -1,7 +1,7 @@
 //! 后台任务: 固定大小线程池, 结果 (任意 Send 消息 `T`) 回投 UI 线程。
 //!
 //! `Tasks::spawn(work)`: work 在工作线程执行并返回 `T`; UI 线程用 `drain()` 取回。
-//! 两条队列 (`Lane`): 网络 (默认, 几个线程) 与本地 (解析/解码/排版, 单独的线程), 卡住的网络任务挡不住本地任务。
+//! 四条队列 (`Lane`): 前台网络、本地解析/解码、图片网络、后台预加载/更新；图片和后台网络不占前台队列。
 //! 投递后通过 `Waker` 写唤醒 fd 打断 poll。运行时用 `T = Delivery` 把结果路由到发起任务的页面实例。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -84,6 +84,10 @@ pub enum Lane {
     Net,
     /// 纯本地的解析 / 解码 / 排版 / 读写缓存: 单独的线程, 不被卡住的网络任务挡住
     Local,
+    /// 图片下载，避免封面/插图占满前台 API 线程。
+    Media,
+    /// 章节预加载、更新检查等非交互任务。
+    Background,
 }
 
 /// 工作线程栈大小。章节 HTML 嵌套很深时解析 / 分块是递归的, 512 KB 曾被撑爆 (P0-1)。
@@ -94,12 +98,14 @@ const WORKER_STACK: usize = 4 * 1024 * 1024;
 pub struct Submitter<T> {
     net: mpsc::Sender<Job<T>>,
     local: mpsc::Sender<Job<T>>,
+    media: mpsc::Sender<Job<T>>,
+    background: mpsc::Sender<Job<T>>,
     pending: Arc<AtomicUsize>,
 }
 
 impl<T> Clone for Submitter<T> {
     fn clone(&self) -> Self {
-        Submitter { net: self.net.clone(), local: self.local.clone(), pending: Arc::clone(&self.pending) }
+        Submitter { net: self.net.clone(), local: self.local.clone(), media: self.media.clone(), background: self.background.clone(), pending: Arc::clone(&self.pending) }
     }
 }
 
@@ -112,6 +118,8 @@ impl<T: Send + 'static> Submitter<T> {
         let jobs = match lane {
             Lane::Net => &self.net,
             Lane::Local => &self.local,
+            Lane::Media => &self.media,
+            Lane::Background => &self.background,
         };
         self.pending.fetch_add(1, Ordering::SeqCst);
         if jobs.send(Box::new(work)).is_err() {
@@ -160,7 +168,9 @@ impl<T: Send + 'static> Tasks<T> {
         };
         let net = lane("net", net);
         let local = lane("local", local);
-        let submitter = Submitter { net, local, pending: Arc::clone(&pending) };
+        let media = lane("media", 2);
+        let background = lane("background", 1);
+        let submitter = Submitter { net, local, media, background, pending: Arc::clone(&pending) };
         Tasks { submitter: Some(submitter), results_tx, results_rx, waker, workers, pending }
     }
 

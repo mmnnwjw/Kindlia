@@ -35,6 +35,8 @@ pub struct NovelOutline {
     pub provider_id: String,
     pub novel_id: String,
     pub title_jp: String,
+    #[serde(default,deserialize_with="crate::formatting::deserialize_authors")]
+    pub authors: Vec<String>,
     pub title_zh: Option<String>,
     #[serde(rename = "type")]
     pub novel_type: Option<String>,

@@ -125,9 +125,10 @@ impl Page<Kindlia> for BookPage {
                 let meta = vec![
                     format!(
                         "{} · {} 章",
-                        novel.novel_type.as_deref().unwrap_or("网络小说"),
+                        novel.novel_type.as_deref().unwrap_or("Web小说"),
                         total
                     ),
+                    format!("{} · {}", crate::formatting::characters(novel.total_characters), crate::formatting::updated(novel.toc.iter().filter_map(|c| c.create_at).max())),
                     format!("标签：{}", novel.keywords.join("、")),
                 ];
                 let resume = cx.app.repo.store.progress(&self.key).is_some();
@@ -227,10 +228,10 @@ impl Page<Kindlia> for BookPage {
                         frame,
                         Rect::new(0, (start + m.row_h() * i as u32) as i32, w, m.row_h()),
                         item.title(),
-                        if item.chapter_id.is_some() {
-                            "章节"
+                        &if item.chapter_id.is_some() {
+                            crate::formatting::date(item.create_at)
                         } else {
-                            "分卷"
+                            "分卷".into()
                         },
                         "",
                         item.chapter_id.as_ref().map(|_| 200 + i as u32),
@@ -410,12 +411,9 @@ impl Page<Kindlia> for BookPage {
                 self.loading = false;
                 match result.0 {
                     Ok(loaded) => {
-                        let repo = cx.app.repo.clone();
                         let key = self.key.clone();
                         let r = detail::cover_rect(cx);
-                        cx.spawn_droppable(move || {
-                            CoverResult(crate::covers::for_book(&repo, &key, (r.w, r.h)))
-                        });
+                        crate::covers::spawn(cx,key,(r.w,r.h),move |_,image|CoverResult(image));
                         self.novel = Some(loaded.value);
                         self.notice = loaded.notice.unwrap_or_default();
                     }

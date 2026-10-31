@@ -2,8 +2,11 @@ pub mod account;
 pub mod api;
 pub mod conversion;
 pub mod covers;
+pub mod comment_format;
 pub mod epub;
 pub mod fonts;
+pub mod formatting;
+pub mod images;
 pub mod gateway;
 pub mod history;
 pub mod migration;
@@ -16,6 +19,8 @@ pub mod sleep;
 pub mod stats;
 pub mod store;
 pub mod tz;
+pub mod update;
+pub mod update_install;
 #[cfg(test)]
 mod tests;
 
@@ -25,6 +30,7 @@ use repository::Repository;
 use store::{Config, Store};
 
 pub struct Kindlia {
+    pub pending_update: Option<update::Release>,
     pub progress_writer: progress::Writer,
     pub config: Config,
     pub repo: Repository,
@@ -73,6 +79,7 @@ impl Kindlia {
             offline: config.offline,
         };
         Ok(Self {
+            pending_update: None,
             progress_writer: progress::Writer::new()?,
             config,
             repo,
@@ -147,6 +154,7 @@ impl App for Kindlia {
     }
     fn on_start(cx: &mut kn_ui::Cx<Self>) {
         history::start(cx);
+        update::start(cx);
         let root = cx.app.repo.store.root.clone();
         let limit = cx.app.config.cache_limit_mb;
         // 与 KN 一样独立执行维护，不能占住唯一的本地章节/字体读取队列。
@@ -170,6 +178,9 @@ impl App for Kindlia {
         }
     }
     fn take_transition(&mut self, _top: kn_ui::PageId) -> kn_ui::Transition<Self> {
+        if !self.lock_pending && matches!(_top.0,10|11|130) {
+            if let Some(release)=self.pending_update.take() {return kn_ui::Transition::Push(Box::new(pages::update::UpdatePage::with_release(release)));}
+        }
         if self.lock_pending {
             self.lock_pending = false;
             self.lock_showing = true;

@@ -17,7 +17,9 @@ pub struct Thread {
     remote: usize,
     remotes: usize,
     page: usize,
-    lines: Vec<(String, usize, bool)>,
+    lines: Vec<(crate::comment_format::Line, usize, bool)>,
+    expanded: std::collections::HashSet<String>,
+    format_hits: Vec<crate::comment_format::Action>,
     busy: bool,
     notice: String,
     picker: Option<(usize, bool, choice::Choice)>,
@@ -36,6 +38,8 @@ impl Thread {
             remotes: 1,
             page: 0,
             lines: vec![],
+            expanded: Default::default(),
+            format_hits: vec![],
             busy: false,
             notice: String::new(),
             picker: None,
@@ -139,37 +143,15 @@ impl Thread {
             glyphs: cx.glyphs,
             chain: &cx.app.ui_fonts,
         };
-        let mut widths = std::collections::HashMap::new();
         for n in 0..=self.replies.len() {
-            let Some(c) = self.comment(n) else {
-                continue;
-            };
+            let Some(c) = self.comment(n) else {continue;};
             let author = c["authorUsername"].as_str().unwrap_or("用户").to_owned();
-            let body = if c["status"] == 0 || c["status"].is_null() {
-                c["content"].as_str().unwrap_or("")
-            } else {
-                "评论已隐藏或删除"
-            }
-            .to_owned();
-            self.lines.push((author, n, true));
-            let width = (cx.width - 2 * m.margin - if n > 0 { m.margin } else { 0 }) as f32;
-            for paragraph in body.lines() {
-                let mut line = String::new();
-                let mut used = 0.;
-                for ch in paragraph.chars() {
-                    let w = *widths
-                        .entry(ch)
-                        .or_insert_with(|| ink.width(&ch.to_string(), m.body));
-                    if used + w > width && !line.is_empty() {
-                        self.lines.push((std::mem::take(&mut line), n, false));
-                        used = 0.;
-                    }
-                    line.push(ch);
-                    used += w;
-                }
-                self.lines.push((line, n, false));
-            }
-            self.lines.push((String::new(), n, false));
+            let body = if c["status"] == 0 || c["status"].is_null() {c["content"].as_str().unwrap_or("")} else {"评论已隐藏或删除"}.to_owned();
+            let id = c["id"].to_string();
+            let width = (cx.width - 2*m.margin - if n>0 {m.margin} else {0}) as f32;
+            self.lines.push((crate::comment_format::Line{runs:vec![crate::comment_format::Run{text:author,..Default::default()}]},n,true));
+            for line in crate::comment_format::layout(&body,&id,&self.expanded,&ink,m.body,width) {self.lines.push((line,n,false));}
+            self.lines.push((Default::default(),n,false));
         }
     }
     fn rows(cx: &Cx<Kindlia>) -> usize {
@@ -182,8 +164,8 @@ impl Page<Kindlia> for Thread {
     fn id(&self) -> PageId {
         PageId(58)
     }
-    fn enter(&mut self, cx: &mut Cx<Kindlia>, _: bool) {
-        self.load(cx);
+    fn enter(&mut self, cx: &mut Cx<Kindlia>, returning: bool) {
+        if !returning {self.load(cx);}
     }
     fn wants_backdrop(&self) -> kn_ui::Backdrop {
         self.picker
@@ -205,6 +187,8 @@ impl Page<Kindlia> for Thread {
         header(cx, f, "评论与回复", true);
         let m = cx.app.metrics;
         if self.editing.is_some() {
+            button(cx,f,Rect::new(m.margin as i32,(m.header_h()+m.margin/2) as i32,(cx.width-3*m.margin)/2,m.touch),"格式说明",90,true);
+            button(cx,f,Rect::new(((cx.width+m.margin)/2) as i32,(m.header_h()+m.margin/2) as i32,(cx.width-3*m.margin)/2,m.touch),"预览草稿",91,true);
             let h = TextEditor::height(&m);
             let mut ink = Ink {
                 fonts: cx.fonts,
@@ -232,6 +216,8 @@ impl Page<Kindlia> for Thread {
             glyphs: cx.glyphs,
             chain: &cx.app.ui_fonts,
         };
+        let mut format_regions = vec![];
+        self.format_hits.clear();
         for (i, (text, n, author)) in self
             .lines
             .iter()
@@ -241,18 +227,9 @@ impl Page<Kindlia> for Thread {
         {
             let y = m.header_h() + m.margin + (i as f32 * m.body * 1.45) as u32;
             let x = m.margin + if *n > 0 { m.margin } else { 0 };
-            ink.text(
-                f,
-                x as i32,
-                y as i32,
-                text,
-                if *author { m.small } else { m.body },
-                if *author {
-                    cx.theme.muted
-                } else {
-                    cx.theme.foreground
-                },
-            );
+            for (rect,action) in crate::comment_format::draw(&mut ink,f,text,x as i32,y as i32,if *author {m.small}else{m.body},if *author{cx.theme.muted}else{cx.theme.foreground},cx.theme.background) {
+                let id=500_000+self.format_hits.len() as u32;self.format_hits.push(action);format_regions.push((id,rect));
+            }
             let rect = Rect::new(
                 x as i32,
                 y as i32,
@@ -270,6 +247,7 @@ impl Page<Kindlia> for Thread {
             cx.hits.add(HitId(300_000 + n as u32), rect);
         }
 
+        for (id,rect) in format_regions {cx.hits.add(HitId(id),rect);}
         if !self.notice.is_empty() {
             let note = ink.fit(&self.notice, m.tiny, (cx.width - 2 * m.margin) as f32);
             ink.text(
@@ -346,6 +324,10 @@ impl Page<Kindlia> for Thread {
             return Transition::None;
         }
         if let Some((target, edit)) = self.editing {
+            match hit(cx,e){
+                Some(90)=>return Transition::Push(Box::new(formatted::FormattedPage::new("评论格式",formatted::HELP))),
+                Some(91)=>return Transition::Push(Box::new(formatted::FormattedPage::new("草稿预览",&self.editor.text()))),_=>{}
+            }
             if hit(cx, e) == Some(1) {
                 self.editing = None;
                 cx.request_redraw(RefreshHint::Clean);
@@ -368,6 +350,16 @@ impl Page<Kindlia> for Thread {
                     }
                     cx.request_redraw(RefreshHint::Ui);
                 }
+            }
+            return Transition::None;
+        }
+        if let Some(id) = hit(cx,e).filter(|id| *id>=500_000) {
+            if let Some(action)=self.format_hits.get((id-500_000) as usize).cloned() {
+                match action {
+                    crate::comment_format::Action::Toggle(key)=>{if !self.expanded.remove(&key){self.expanded.insert(key);}self.lines.clear();},
+                    crate::comment_format::Action::Link(url)=>return Transition::Push(Box::new(text::TextPage::new("链接地址",&url))),
+                }
+                cx.request_redraw(RefreshHint::Ui);
             }
             return Transition::None;
         }

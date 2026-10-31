@@ -29,6 +29,8 @@ enum Field {
     Gateway,
     GatewayUrl,
     GatewayKey,
+    UpdateAuto,
+    UpdateR2,
     Animation,
     Steps,
     Refresh,
@@ -80,7 +82,7 @@ fn fields(group: usize) -> &'static [(Field, &'static str)] {
             (Original, "显示原文"),
             (OriginalSize, "日语字号（%）"),
             (OriginalGray, "日语灰度"),
-            (IgnoreJapanese, "隐藏未翻译网文"),
+            (IgnoreJapanese, "隐藏未翻译Web"),
             (IgnoreAi, "隐藏纯 AI 译文"),
             (CacheLimit, "网络缓存上限（MB）"),
             (History, "云端阅读历史"),
@@ -94,6 +96,8 @@ fn fields(group: usize) -> &'static [(Field, &'static str)] {
             (Auth, "登录服务"),
             (Forum, "书籍评论服务"),
             (Offline, "离线模式"),
+            (UpdateAuto, "自动检查更新"),
+            (UpdateR2, "R2 更新地址"),
         ],
     }
 }
@@ -134,6 +138,8 @@ impl SettingsPage {
             Translated => on(self.draft.show_translation),
             Offline => on(self.draft.offline),
             Gateway => on(self.draft.gateway_enabled),
+            UpdateAuto => on(self.draft.update_auto),
+            UpdateR2 => if self.draft.update_r2_url.is_empty(){"未配置".into()}else{self.draft.update_r2_url.clone()},
             GatewayKey => if self.draft.gateway_key.is_empty() {
                 "未设置"
             } else {
@@ -469,6 +475,8 @@ impl Page<Kindlia> for SettingsPage {
                         let text = self.editor.text();
                         let validated = if matches!(field, Field::GatewayKey) {
                             Ok(text)
+                        } else if matches!(field, Field::UpdateR2) {
+                            if text.trim().is_empty(){Ok(String::new())}else{crate::update::https(&text)}
                         } else if matches!(field, Field::GatewayUrl) {
                             crate::gateway::Gateway::new(&text, "preview-key-123456")
                                 .map(|_| text.trim().trim_end_matches('/').to_owned())
@@ -484,6 +492,7 @@ impl Page<Kindlia> for SettingsPage {
                                     Field::Auth => self.draft.auth_base_url = v,
                                     Field::GatewayUrl => self.draft.gateway_url = v,
                                     Field::GatewayKey => self.draft.gateway_key = v,
+                                    Field::UpdateR2 => self.draft.update_r2_url = v,
                                     _ => self.draft.forum_base_url = v,
                                 };
                                 if self.save(cx) {
@@ -529,6 +538,7 @@ impl Page<Kindlia> for SettingsPage {
                     } else {
                         match field {
                             Indent => self.draft.first_line_indent = !self.draft.first_line_indent,
+                            UpdateAuto => self.draft.update_auto = !self.draft.update_auto,
                             Animation => {
                                 self.draft.page_turn_animation = !self.draft.page_turn_animation
                             }
@@ -585,7 +595,7 @@ impl Page<Kindlia> for SettingsPage {
                                 self.picker = Some((
                                     field,
                                     choice::Choice::new(
-                                        "云端阅读历史（仅网络小说）",
+                                        "云端阅读历史（仅Web小说）",
                                         ["立即同步", "恢复云端记录", "暂停云端记录"],
                                         None,
                                     ),
@@ -658,13 +668,14 @@ impl Page<Kindlia> for SettingsPage {
                             Scan => {
                                 self.fonts = crate::fonts::list(&cx.app.repo.store.root);
                             }
-                            Api | Auth | Forum | GatewayUrl | GatewayKey => {
+                            Api | Auth | Forum | GatewayUrl | GatewayKey | UpdateR2 => {
                                 self.editor.set_masked(matches!(field, GatewayKey));
                                 self.editor.set_text(match field {
                                     Api => &self.draft.api_base_url,
                                     Auth => &self.draft.auth_base_url,
                                     GatewayUrl => &self.draft.gateway_url,
                                     GatewayKey => &self.draft.gateway_key,
+                                    UpdateR2 => &self.draft.update_r2_url,
                                     _ => &self.draft.forum_base_url,
                                 });
                                 self.editing = Some(field);

@@ -5,6 +5,7 @@ pub mod cloud;
 pub mod comments;
 pub mod detail;
 pub mod filters;
+pub mod formatted;
 pub mod import;
 pub mod library;
 pub mod light;
@@ -18,6 +19,7 @@ pub mod settings;
 pub mod storage;
 pub mod stats;
 pub mod text;
+pub mod update;
 
 use crate::Kindlia;
 use kn_platform::{GestureKind, InputEvent};

@@ -180,29 +180,16 @@ impl ImagePage {
         let url = self.url.clone();
         let budget = self.budget;
         let size = (cx.width, cx.height);
-        let work = move || Decoded {
+        crate::images::spawn(cx,repo,url,move |result| Decoded {
             original,
-            result: repo
-                .image_bytes(&url)
-                .map_err(LoadFailure::Other)
-                .and_then(|bytes| {
-                    kn_render::image::decode_gray_with_budget(
-                        &bytes,
-                        if original { None } else { Some(size) },
-                        budget,
-                    )
-                    .map(Some)
-                    .map_err(|e| match e {
-                        ImageError::TooLarge => LoadFailure::TooLarge(budget),
-                        other => LoadFailure::Other(other.to_string()),
-                    })
-                }),
-        };
-        if self.url.starts_with("epub://") {
-            cx.spawn_local_droppable(work);
-        } else {
-            cx.spawn_droppable(work);
-        }
+            result: result.map_err(LoadFailure::Other).and_then(|bytes| {
+                bytes.decode(if original { None } else { Some(size) }, budget)
+                  .map(Some).map_err(|e| match e {
+                    ImageError::TooLarge => LoadFailure::TooLarge(budget),
+                    other => LoadFailure::Other(other.to_string()),
+                  })
+            }),
+        });
         cx.request_redraw(RefreshHint::Ui);
     }
 

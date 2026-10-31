@@ -460,7 +460,7 @@ fn fetch(
         Mode::WenkuBook(id) => format!("wenku/{}", encode(id)),
         Mode::Folders(..) => "user/favored".into(),
         Mode::Favorites(wenku, id) => format!(
-            "user/favored-{}/{}?page={page}&pageSize={size}&sort=update&level=1&provider={}",
+            "user/favored-{}/{}?page={page}&pageSize={size}&sort=update&level=0&provider={}",
             if *wenku { "wenku" } else { "web" },
             encode(id),
             encode(crate::api::DEFAULT_PROVIDERS)
@@ -601,7 +601,7 @@ fn fetch(
                         c["replyCount"].as_u64().unwrap_or(0)
                     ),
                     subtitle: if c["status"] == 0 {
-                        string(c, "content")
+                        crate::comment_format::preview(&string(c, "content"))
                     } else {
                         "评论已隐藏或删除".into()
                     },
@@ -640,18 +640,17 @@ fn fetch(
                         string(b, "cover"),
                     );
                 }
+                let mut authors=crate::formatting::authors(b);
+                if authors.is_empty() {
+                    match &action {
+                        Action::Web(key) => {if let Some(n)=repo.store.read_cache::<crate::model::Novel>("novels",key) {authors=n.authors.into_iter().map(|a|a.name).collect();}},
+                        Action::Wenku(id) => {let meta=crate::covers::metadata(repo,&NovelKey {provider_id:"wenku".into(),novel_id:id.clone()},false);if !meta.author.is_empty(){authors.push(meta.author);}},
+                        _=>{}
+                    }
+                }
                 items.push(Item {
                     title: title(b),
-                    subtitle: b["authors"]
-                        .as_array()
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|s| s.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" / ")
-                        })
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| string(b, "providerId")),
+                    subtitle: if authors.is_empty(){string(b,"providerId")}else{authors.join(" / ")},
                     action,
                     cover: b["cover"]
                         .as_str()
@@ -731,9 +730,7 @@ impl Page<Kindlia> for CloudPage {
                         let repo = cx.app.repo.clone();
                         let url = cover.clone();
                         let tag = cover_key.clone();
-                        cx.spawn_droppable(move || {
-                            CoverResult(tag, crate::covers::image(&repo, &url, (size.w, size.h)))
-                        });
+                        crate::images::spawn_fit(cx,repo,url,(size.w,size.h),move |r|CoverResult(tag,r.or_else(|_|crate::covers::fallback((size.w,size.h)))));
                     }
                     let author = v["authors"]
                         .as_array()
@@ -758,11 +755,16 @@ impl Page<Kindlia> for CloudPage {
                         .iter()
                         .filter(|i| matches!(i.action, Action::Volume(..)))
                         .count();
-                    let meta = vec![
+                    let mut meta = vec![
                         format!("{} · {} 卷", string(&v, "level"), volumes),
                         format!("出版社：{}", string(&v, "publisher")),
                         format!("标签：{tags}"),
                     ];
+                    // Publication date is distinct from Web chapter update time.
+                    let published = crate::formatting::date(v["latestPublishAt"].as_i64());
+                    if !published.is_empty() {
+                        meta.insert(1, format!("最新出版于 {}", &published[..10]));
+                    }
                     detail::render(
                         cx,
                         frame,
@@ -850,7 +852,7 @@ impl Page<Kindlia> for CloudPage {
         let actions = match self.mode {
             Mode::Wenku(..) => ["搜索", "分级", "刷新"],
             Mode::WenkuBook(..) => ["云收藏", "书籍评论", "刷新"],
-            Mode::Folders(..) => ["网文/文库", "新建收藏夹", "刷新"],
+            Mode::Folders(..) => ["Web/文库", "新建收藏夹", "刷新"],
             Mode::History => ["暂停/恢复", "清空历史", "刷新"],
             Mode::Rank(..) => ["来源", "范围", "刷新"],
             Mode::Comments(..) => ["发表评论", "", ""],
@@ -902,7 +904,7 @@ impl Page<Kindlia> for CloudPage {
                 &cx.theme,
                 &m,
                 Rect::new(m.margin as i32, y as i32, w - 2 * m.margin, m.touch),
-                &["网络小说", "文库小说", "排行"],
+                &["Web小说", "文库小说", "排行"],
                 1,
                 60_000,
             );
@@ -1052,9 +1054,7 @@ impl Page<Kindlia> for CloudPage {
                         let url = item.cover.clone();
                         let repo = cx.app.repo.clone();
                         let tag = cover_key.clone();
-                        cx.spawn_droppable(move || {
-                            CoverResult(tag, crate::covers::image(&repo, &url, (size.w, size.h)))
-                        });
+                        crate::images::spawn_fit(cx,repo,url,(size.w,size.h),move |r|CoverResult(tag,r.or_else(|_|crate::covers::fallback((size.w,size.h)))));
                     }
                     let mut ink = kn_ui::widgets::Ink {
                         fonts: cx.fonts,
@@ -1400,7 +1400,7 @@ impl Page<Kindlia> for CloudPage {
                             2,
                             choice::Choice::new(
                                 "收藏类型",
-                                ["网络小说", "文库小说"],
+                                ["Web小说", "文库小说"],
                                 Some(w as usize),
                             ),
                         ));

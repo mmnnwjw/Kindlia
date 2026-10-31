@@ -24,3 +24,5 @@ roxmltree = "0.20"
 libc.workspace = true
 simplecss = "0.2.2"
 zhconv = { version = "0.4.2", default-features = false, features = ["opencc-hans", "opencc-hant"] }
+
+ring = "0.17"

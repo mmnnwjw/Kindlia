@@ -83,7 +83,7 @@ fn flush(repo: &Repository, user: &str) -> Result<String, String> {
     if repo.api.get::<bool>("user/read-history/paused")? {
         return Ok("云端阅读历史已暂停；待同步记录保留在本机".into());
     }
-    if pending.is_empty() {return Ok("网文阅读记录已同步；文库进度保存在本机".into());}
+    if pending.is_empty() {return Ok("Web阅读记录已同步；文库进度保存在本机".into());}
     for (id, value) in pending {
         repo.api.request(
             "PUT",
@@ -102,7 +102,7 @@ fn flush(repo: &Repository, user: &str) -> Result<String, String> {
             save(&repo.store, user, &latest)?;
         }
     }
-    Ok("网文阅读记录已同步；文库进度保存在本机".into())
+    Ok("Web阅读记录已同步；文库进度保存在本机".into())
 }
 pub fn start(cx: &mut kn_ui::Cx<Kindlia>) {
     if cx.app.history_syncing || cx.app.repo.offline || !cx.app.repo.api.signed_in() {

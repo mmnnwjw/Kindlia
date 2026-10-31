@@ -499,8 +499,9 @@ checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
 
 [[package]]
 name = "kindlia-app"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
+ "ring",
  "kn-net",
  "kn-platform",
  "kn-render",
@@ -520,14 +521,14 @@ dependencies = [
 
 [[package]]
 name = "kn-ime"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "brotli-decompressor",
 ]
 
 [[package]]
 name = "kn-net"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "flate2",
  "rustls",
@@ -536,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "kn-platform"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cc",
  "kn-render",
@@ -545,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "kn-render"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cc",
  "image-webp",
@@ -558,7 +559,7 @@ dependencies = [
 
 [[package]]
 name = "kn-text"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "html5ever",
  "kn-render",
@@ -570,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "kn-ui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "kn-ime",
  "kn-platform",

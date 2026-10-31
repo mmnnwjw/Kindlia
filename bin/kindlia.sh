@@ -119,6 +119,15 @@ if [ "$SLEEP_COVER" = 1 ]; then
     fi
 fi
 export KINDLIA_SLEEP_COVER=$SLEEP_COVER
+# Finish/roll back an interrupted in-app update before staging the executable.
+if [ -f "$APP_DIR/.kindlia-install" ]; then
+    RECOVER_BIN=/tmp/kindlia-recover
+    cp "$SCRIPT_DIR/kindlia" "$RECOVER_BIN" && chmod +x "$RECOVER_BIN" || exit 1
+    "$RECOVER_BIN" --recover-update >> "$LOG_FILE" 2>&1
+    RECOVER_RC=$?
+    rm -f "$RECOVER_BIN"
+    [ "$RECOVER_RC" = 0 ] && [ ! -f "$APP_DIR/.kindlia-install" ] || { log "update recovery incomplete"; exit 1; }
+fi
 cp "$SCRIPT_DIR/kindlia" "$BIN_RUN" && chmod +x "$BIN_RUN" || { log "cannot stage binary"; exit 1; }
 # 恢复上一次崩溃留下的显示状态。
 restore_display

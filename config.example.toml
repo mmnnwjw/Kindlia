@@ -39,8 +39,12 @@ page_flash = false # 每次翻页全屏刷新，重启生效
 landscape_side = "left" # left / right
 sleep_cover = false # 休眠显示当前书封面，重启生效
 operation_tips = true
-ignore_japanese = false # 网文列表隐藏无译文章节的书籍
-ignore_ai = false # 网文列表隐藏只有 GPT/Sakura 译文的书籍
+ignore_japanese = false # Web 列表隐藏无译文章节的书籍
+ignore_ai = false # Web 列表隐藏只有 GPT/Sakura 译文的书籍
 cache_limit_mb = 192 # 启动时清理网络/公共缓存；已下载文库由存储页手动清理
 convert = "" # 关闭 / t2s 繁转简 / s2t 简转繁
 lock_pin = "" # 由设置页保存带盐摘要，请勿填写账号密码
+
+# 应用内更新，R2 填桶的公共 HTTPS 根地址（手动上传 releases.json / ZIP / ZIP.sig）。
+update_auto = true
+update_r2_url = "https://update1.mmnnwjw.dpdns.org"

@@ -80,7 +80,7 @@ Kindlia 与 KinNovel 互相独立运行，两者配置与数据目录彼此隔�
 
 ### 安装
 
-1. 前往项目的 [Releases 页面](https://github.com/mmnnwjw/Kindlia/releases) 下载最新的发布包（例如 `kindlia-1.0.0.zip`）。
+1. 前往项目的 [Releases 页面](https://github.com/mmnnwjw/Kindlia/releases) 下载最新的发布包（例如 `kindlia-1.1.0.zip`）。
 2. 将 Kindle 连接至电脑，解压压缩包，将内部的 `kindlia` 文件夹完整拷贝至 Kindle 盘符的 **`extensions/`** 目录：
    ```text
    /mnt/us/extensions/kindlia/
@@ -161,6 +161,10 @@ gateway_key = ""                            # 与 Worker 部署一致的私密�
 
 ---
 
+## 应用内更新
+
+在「我的 → 检查更新」检查 GitHub / R2 的正式版本；可在网络设置中关闭自动检查或修改 R2 地址。更新包经 SHA256 与独立签名验证，安装保留配置和阅读数据，不增加 KUAL 菜单。详见 [更新与 R2 镜像说明](docs/UPDATES.md)。
+
 ## 编译与打包
 
 工程结构独立，不需要依赖原 KinNovel 源码目录。
@@ -193,7 +197,7 @@ gateway_key = ""                            # 与 Worker 部署一致的私密�
 cd ..
 python tools/package_release.py
 ```
-执行后将在 `dist/` 目录下生成 `kindlia-1.0.0.zip`，可直接部署至设备。分发包仅包含运行文件、配置模板与许可证；使用说明和图文教程请查看本仓库。
+执行后将在 `dist/` 目录下生成 `kindlia-1.1.0.zip`，可直接部署至设备。分发包仅包含运行文件、配置模板与许可证；使用说明和图文教程请查看本仓库。
 
 ---
 

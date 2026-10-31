@@ -30,14 +30,9 @@ fn art(
     let tag = format!("{}:{}x{}", key.cache_id(), size.0, size.1);
     if !art.contains_key(&tag) {
         art.insert(tag.clone(), None);
-        let repo = cx.app.repo.clone();
         let key = key.clone();
         let id = tag.clone();
-        cx.spawn_droppable(move || {
-            let meta = crate::covers::metadata(&repo, &key, true);
-            let image = crate::covers::image(&repo, &meta.cover, size);
-            ArtResult(id, meta, image)
-        });
+        crate::covers::spawn(cx,key,size,move |meta,image| ArtResult(id,meta,image));
     }
     tag
 }
@@ -218,7 +213,7 @@ impl Page<Kindlia> for LibraryPage {
                 cx,
                 frame,
                 if self.searching {
-                    "搜索网络小说"
+                    "搜索Web小说"
                 } else {
                     "发现"
                 },
@@ -318,7 +313,7 @@ impl Page<Kindlia> for LibraryPage {
                 &cx.theme,
                 &m,
                 Rect::new(m.margin as i32, y as i32, width - 2 * m.margin, m.touch),
-                &["网络小说", "文库小说", "排行"],
+                &["Web小说", "文库小说", "排行"],
                 0,
                 50,
             );
@@ -349,7 +344,7 @@ impl Page<Kindlia> for LibraryPage {
                 cx,
                 frame,
                 Rect::new(0, y as i32, cell, m.touch),
-                "网络收藏",
+                "Web收藏",
                 60,
                 self.shelf_source == 1,
             );
@@ -415,8 +410,8 @@ impl Page<Kindlia> for LibraryPage {
                     let size = widgets::cover_slot(&m, rect);
                     let id = art(&mut self.art, cx, &book.key(), (size.w, size.h));
                     let info = self.art.get(&id).and_then(|a| a.as_ref());
-                    let subtitle = info
-                        .map(|(m, _)| m.author.clone())
+                    let subtitle = (!book.authors.is_empty()).then(||book.authors.join(" / "))
+                        .or_else(|| info.map(|(m, _)| m.author.clone()))
                         .filter(|s| !s.is_empty())
                         .unwrap_or_else(|| format!("{} · {} 章", book.provider_id, book.total));
                     let mut ink = Ink {

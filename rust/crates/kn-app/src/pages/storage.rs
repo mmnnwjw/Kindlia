@@ -130,7 +130,7 @@ impl Page<Kindlia> for StoragePage {
         }
         header(cx, f, "存储空间", true);
         let m = cx.app.metrics;
-        for (i, title) in ["网络小说及公共缓存", "文库小说下载"].iter().enumerate() {
+        for (i, title) in ["Web小说及公共缓存", "文库小说下载"].iter().enumerate() {
             let y = m.header_h() + i as u32 * (m.row_h() + m.touch);
             row(
                 cx,

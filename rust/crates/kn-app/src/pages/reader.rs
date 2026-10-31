@@ -28,7 +28,7 @@ struct ChapterResult(
 );
 struct VolumeResult(u64, Result<NovelKey, String>);
 struct NovelResult(Result<Loaded<Novel>, String>);
-struct ImageResult(String, Result<Bitmap, String>);
+struct ImageResult(u64,String, Result<Bitmap, String>);
 struct Prefetched;
 struct FontResult(String, Result<Vec<u8>, String>, f64);
 struct CachedChapter {
@@ -62,7 +62,41 @@ fn page_signature(cx: &Cx<Kindlia>) -> String {
 enum ImageSlot {
     Loading,
     Ready(Bitmap),
-    Failed,
+    Failed(std::time::Instant),
+}
+
+/// 最近一次提交的可见插图, 与预取、正文位图缓存和时钟重绘分开记录。
+#[derive(Clone, Debug, PartialEq)]
+struct ImageFrame {
+    page: (String, u64, usize, u32, u32),
+    images: Vec<(Rect, String, u64)>,
+    coverage: f32,
+}
+
+impl ImageFrame {
+    fn needs_clean(&self, shown: Option<&Self>) -> bool {
+        let changed = shown != Some(self);
+        let previous = shown.map_or(0.0, |s| s.coverage);
+        changed && (self.coverage >= 0.075 || (self.coverage - previous).abs() >= 0.075)
+    }
+}
+
+/// 按横向条带求矩形并集面积, 不把重叠图片计算两次。
+fn image_area(rects: &[Rect]) -> u64 {
+    let mut xs: Vec<_> = rects.iter().flat_map(|r| [r.x, r.right()]).collect();
+    xs.sort_unstable();
+    xs.dedup();
+    xs.windows(2).map(|x| {
+        let mut spans: Vec<_> = rects.iter().filter(|r| r.x < x[1] && r.right() > x[0]).map(|r| (r.y, r.bottom())).collect();
+        spans.sort_unstable();
+        let mut bottom = i32::MIN;
+        let mut height = 0u64;
+        for (y, end) in spans {
+            height += (end - y.max(bottom)).max(0) as u64;
+            bottom = bottom.max(end);
+        }
+        (x[1] - x[0]) as u64 * height
+    }).sum()
 }
 
 pub struct ReaderPage {
@@ -92,6 +126,9 @@ pub struct ReaderPage {
     layout: Option<LayoutParams>,
     target: Option<(String, usize)>,
     images: HashMap<String, ImageSlot>,
+    image_versions: HashMap<String,u64>,
+    drawn_images: Option<ImageFrame>,
+    shown_images: Option<ImageFrame>,
     loading: bool,
     load_started: Option<std::time::Instant>,
     progress_store: Option<crate::store::Store>,
@@ -690,6 +727,9 @@ impl ReaderPage {
             layout: None,
             target: None,
             images: HashMap::new(),
+            image_versions: HashMap::new(),
+            drawn_images: None,
+            shown_images: None,
             loading: false,
             load_started: None,
             progress_store: None,
@@ -715,6 +755,7 @@ impl ReaderPage {
         self.paginator = None;
         self.layout = None;
         self.images.clear();
+        self.image_versions.clear();
         self.page_bitmaps.clear();
         self.index = 0;
         self.done = false;
@@ -875,12 +916,12 @@ impl ReaderPage {
             }
             let repo = cx.app.repo.clone();
             let key = self.key.clone();
-            cx.spawn_droppable(move || {
+            if let Some(spawner) = cx.spawner() { spawner.spawn_on(kn_ui::Lane::Background,true,move || {
                 if let Err(e) = repo.chapter(&key, &id, false) {
                     eprintln!("[prefetch] {e}");
                 }
                 Prefetched
-            });
+            }); }
         }
     }
     fn ensure_layout(&mut self, cx: &mut Cx<Kindlia>) {
@@ -967,6 +1008,7 @@ impl ReaderPage {
         self.pages.clear();
         self.done = false;
         self.images.clear();
+        self.image_versions.clear();
         self.page_bitmaps.clear();
         self.widths.clear();
         self.paginator = Some(Paginator::new(self.blocks.clone(), params));
@@ -1091,6 +1133,7 @@ impl ReaderPage {
             self.paginator = cache.paginator;
             self.loading = false;
             self.images.clear();
+        self.image_versions.clear();
             self.page_bitmaps.clear();
             self.notice.clear();
             self.prefetch(cx);
@@ -1221,7 +1264,7 @@ impl ReaderPage {
                                 cx,
                                 frame,
                                 rect,
-                                if matches!(self.images.get(&key), Some(ImageSlot::Failed)) {
+                                if matches!(self.images.get(&key), Some(ImageSlot::Failed(_))) {
                                     "插图无法显示（菜单可重取）"
                                 } else {
                                     "插图加载中…"
@@ -1254,14 +1297,14 @@ impl ReaderPage {
     }
     fn images(&mut self, cx: &mut Cx<Kindlia>) {
         let mut todo = Vec::new();
-        for page in self.pages.iter().skip(self.index.saturating_sub(1)).take(3) {
+        for page in [Some(self.index), self.index.checked_add(1), self.index.checked_sub(1)].into_iter().flatten().filter_map(|i| self.pages.get(i)) {
             for item in page {
                 if let PageItem::Image {
                     url, width, height, ..
                 } = item
                 {
                     let key = format!("{url}|{width}x{height}");
-                    if !self.images.contains_key(&key) {
+                    if !self.images.contains_key(&key) || matches!(self.images.get(&key), Some(ImageSlot::Failed(at)) if at.elapsed() >= crate::images::RETRY_AFTER) {
                         self.images.insert(key.clone(), ImageSlot::Loading);
                         todo.push((key, url.clone(), (*width as u32, *height as u32)));
                     }
@@ -1269,14 +1312,8 @@ impl ReaderPage {
             }
         }
         for (key, url, size) in todo {
-            let repo = cx.app.repo.clone();
-            let local = url.starts_with("epub://");
-            let work = move || ImageResult(key, repo.image(&url, size));
-            if local {
-                cx.spawn_local_droppable(work);
-            } else {
-                cx.spawn_droppable(work);
-            }
+            let generation=self.generation;
+            crate::images::spawn_fit(cx,cx.app.repo.clone(),url,size,move |r| ImageResult(generation,key,r));
         }
         // 仅保留当前和相邻页图像，磁盘原图缓存不受影响。
         let keep: std::collections::HashSet<String> = self
@@ -1401,6 +1438,7 @@ impl Page<Kindlia> for ReaderPage {
         cx.after(Duration::from_secs(30), 1);
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, frame: &mut Bitmap) {
+        self.drawn_images=None;
         self.ensure_layout(cx);
         if self.font_loading.is_some() {
             self.draw_header(cx, frame, (cx.app.metrics.touch / 2) as i32);
@@ -1450,6 +1488,15 @@ impl Page<Kindlia> for ReaderPage {
                 }
             }
         }
+        let content=Rect::new(0,content_top as i32,cx.width,cx.height-content_top);
+        let visible_images:Vec<_>=self.pages.get(self.index).into_iter().flatten().filter_map(|item| {
+            let PageItem::Image{url,x,y,width,height,..}=item else{return None;};
+            let key=format!("{url}|{width}x{height}");let Some(ImageSlot::Ready(image))=self.images.get(&key) else{return None;};
+            let actual=image_rect(image,Rect::new(*x as i32,*y as i32+content_top as i32,*width as u32,*height as u32)).intersect(&content)?;
+            Some((actual,key.clone(),*self.image_versions.get(&key).unwrap_or(&0)))
+        }).collect();
+        let coverage=image_area(&visible_images.iter().map(|i|i.0).collect::<Vec<_>>()) as f32/frame.bounds().area() as f32;
+        self.drawn_images=Some(ImageFrame{page:(format!("{}:{}",self.key.cache_id(),self.chapter_id),self.generation,self.index,cx.width,cx.height),images:visible_images,coverage});
         self.start_tracking();
         self.draw_header(cx, frame, content_top as i32);
         if self.menu || (self.chapter.is_none() && !self.loading) {
@@ -1466,6 +1513,10 @@ impl Page<Kindlia> for ReaderPage {
             }
         }
     }
+    fn refresh_hint(&self)->Option<RefreshHint> {
+        self.drawn_images.as_ref().filter(|f|f.needs_clean(self.shown_images.as_ref())).map(|_|RefreshHint::Flash)
+    }
+    fn presented(&mut self) {if let Some(frame)=&self.drawn_images{self.shown_images=Some(frame.clone());}}
     fn on_idle(&mut self, cx: &mut Cx<Kindlia>) -> bool {
         if self.font_loading.is_some() { return false; }
         self.ensure_layout(cx);
@@ -1837,24 +1888,25 @@ impl Page<Kindlia> for ReaderPage {
         };
         if let Ok(result) = msg.downcast::<ImageResult>() {
             // 尺寸和 URL 都匹配才接受，换章/重新排版后的旧任务不可覆盖当前页面。
-            if self.images.contains_key(&result.0) {
+            if self.generation==result.0 && self.images.contains_key(&result.1) {
                 let affected = |index: usize| {
                     self.pages.get(index).is_some_and(|p| p.iter().any(|item| {
-                    matches!(item, PageItem::Image { url, width, height, .. } if format!("{url}|{width}x{height}") == result.0)
+                    matches!(item, PageItem::Image { url, width, height, .. } if format!("{url}|{width}x{height}") == result.1)
                 }))
                 };
                 let visible = affected(self.index);
                 self.page_bitmaps.retain(|(i, _)| !affected(*i));
                 self.images.insert(
-                    result.0,
-                    match result.1 {
+                    result.1.clone(),
+                    match result.2 {
                         Ok(bitmap) => ImageSlot::Ready(bitmap),
                         Err(e) => {
                             eprintln!("[image] {e}");
-                            ImageSlot::Failed
+                            ImageSlot::Failed(std::time::Instant::now())
                         }
                     },
                 );
+                *self.image_versions.entry(result.1).or_default()+=1;
                 if visible {
                     cx.request_redraw(RefreshHint::Ui);
                 }

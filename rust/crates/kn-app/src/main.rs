@@ -250,6 +250,8 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let root = store::root_dir();
+    kindlia_app::update_install::recover_install(&root);
+    if args.iter().any(|s|s=="--recover-update") { return Ok(()); }
     kindlia_app::migration::device(&root)?;
     if args.iter().any(|s| s == "--migrate-data") {
         println!("Kindlia data migration complete");
