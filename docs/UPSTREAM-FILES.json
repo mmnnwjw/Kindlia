@@ -191,7 +191,7 @@
     {
       "path": "rust/crates/kn-app/src/pages/update.rs",
       "source_sha256": "3d109061f873a442bb4b3d304db2bf718a4ed59c8c38db987e2d8f04f90700d1",
-      "current_sha256": "b917c87639bbe56afde0ffc1d6f078c594195df6ec327293699486250e733b7b",
+      "current_sha256": "8a45abea21f2bcc1b74680f94ca83ba4977e1ac272a5a37f1084a3ba78033318",
       "modified": true
     },
     {
@@ -221,7 +221,7 @@
     {
       "path": "rust/crates/kn-app/src/update.rs",
       "source_sha256": "47cbd487b5921888273ccc8d8184f0e5b90f49c484df79a93d6b43b385d2272e",
-      "current_sha256": "d27b16a4e818409f7159ca698f89374fe5772f8978b7ebd497da13e64786ea7a",
+      "current_sha256": "cba5b90ecca5ef66ada65b225aaebbf40222e574bc500de9c8a155bf705eec93",
       "modified": true
     },
     {

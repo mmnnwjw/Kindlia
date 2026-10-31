@@ -15,10 +15,39 @@ const GITHUB: &str = "https://api.github.com/repos/mmnnwjw/Kindlia/releases?per_
 #[derive(Clone, Debug)]
 pub struct Release {
     pub version: String,
-    pub notes: String,
+    pub changes: Vec<VersionNotes>,
     pub source: String,
     pub urls: Vec<String>,
     pub sha256: String,
+}
+/// Source history is retained independently of downloadable assets.
+#[derive(Clone, Debug)]
+pub struct VersionNotes {
+    pub version: String,
+    pub date: String,
+    pub notes: String,
+}
+impl Release {
+    /// Newest first, excluding the installed version. If up to date, show latest notes.
+    pub fn changes_since(&self, current: &str) -> Vec<&VersionNotes> {
+        let mut changes: Vec<_> = self
+            .changes
+            .iter()
+            .filter(|n| {
+                version(&n.version)
+                    .zip(version(current))
+                    .is_some_and(|(v, c)| v > c)
+            })
+            .collect();
+        if changes.is_empty() {
+            changes.extend(self.changes.iter().find(|n| n.version == self.version));
+        }
+        changes
+    }
+}
+struct Feed {
+    releases: Vec<Release>,
+    changes: Vec<VersionNotes>,
 }
 fn version(s: &str) -> Option<(u32, u32, u32)> {
     let v: Vec<_> = s.trim_start_matches('v').split('.').collect();
@@ -54,11 +83,12 @@ fn get(url: &str, limit: usize) -> Result<Vec<u8>, String> {
     )
     .map_err(|e| e.to_string())
 }
-fn feed(url: &str, source: &str, r2: bool) -> Result<Vec<Release>, String> {
+fn feed(url: &str, source: &str, r2: bool) -> Result<Feed, String> {
     let v: Value =
         serde_json::from_slice(&get(url, 2 * 1024 * 1024)?).map_err(|e| e.to_string())?;
     let list = v.as_array().ok_or("更新列表格式无效")?;
     let mut result = vec![];
+    let mut changes = vec![];
     for r in list.iter().take(30) {
         if r["draft"].as_bool() == Some(true) || r["prerelease"].as_bool() == Some(true) {
             continue;
@@ -67,6 +97,22 @@ fn feed(url: &str, source: &str, r2: bool) -> Result<Vec<Release>, String> {
             continue;
         };
         let v = v.trim_start_matches('v');
+        changes.push(VersionNotes {
+            version: v.into(),
+            date: r["published_at"]
+                .as_str()
+                .or_else(|| r["created_at"].as_str())
+                .unwrap_or("")
+                .chars()
+                .take(10)
+                .collect(),
+            notes: r["body"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(32000)
+                .collect(),
+        });
         let package = format!("kindlia-{v}.zip");
         let Some(assets) = r["assets"].as_array() else {
             continue;
@@ -93,13 +139,16 @@ fn feed(url: &str, source: &str, r2: bool) -> Result<Vec<Release>, String> {
         https(&download)?;
         result.push(Release {
             version: v.into(),
-            notes: r["body"].as_str().unwrap_or("").into(),
+            changes: vec![],
             source: source.into(),
             urls: vec![download],
             sha256: sha.to_ascii_lowercase(),
         });
     }
-    Ok(result)
+    Ok(Feed {
+        releases: result,
+        changes,
+    })
 }
 pub fn check(config: &Config, store: &Store) -> Result<Release, String> {
     if config.offline {
@@ -124,15 +173,24 @@ pub fn check(config: &Config, store: &Store) -> Result<Release, String> {
     drop(tx);
     let mut deadline = std::time::Instant::now() + Duration::from_secs(23);
     let mut releases = vec![];
+    let mut history = std::collections::BTreeMap::new();
     let mut errors: Vec<String> = vec![];
     for _ in 0..count {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         match rx.recv_timeout(left) {
             Ok(Ok(mut v)) => {
-                if !v.is_empty() {
+                if !v.releases.is_empty() {
                     deadline = deadline.min(std::time::Instant::now() + Duration::from_secs(5));
                 }
-                releases.append(&mut v)
+                releases.append(&mut v.releases);
+                for n in v.changes {
+                    if let Some(key) = version(&n.version) {
+                        let old = history.entry(key).or_insert_with(|| n.clone());
+                        if old.notes.trim().is_empty() && !n.notes.trim().is_empty() {
+                            *old = n;
+                        }
+                    }
+                }
             }
             Ok(Err(e)) => errors.push(e),
             Err(_) => break,
@@ -152,6 +210,12 @@ pub fn check(config: &Config, store: &Store) -> Result<Release, String> {
             }
         }
     }
+    chosen.changes = history
+        .into_iter()
+        .rev()
+        .filter(|(v, _)| Some(*v) <= version(&chosen.version))
+        .map(|(_, n)| n)
+        .collect();
     chosen
         .urls
         .sort_by_key(|u| u.starts_with("https://github.com/"));

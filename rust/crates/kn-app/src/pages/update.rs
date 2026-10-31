@@ -15,6 +15,8 @@ pub struct UpdatePage {
     confirm: Option<choice::Choice>,
     installed: bool,
     installing: bool,
+    notes_page: usize,
+    notes_layout: Option<(u32, u32, Vec<(String, u8)>)>,
 }
 impl UpdatePage {
     pub fn with_release(release: crate::update::Release) -> Self {
@@ -25,6 +27,8 @@ impl UpdatePage {
     }
     fn check(&mut self, cx: &Cx<Kindlia>) {
         self.busy = true;
+        self.notes_page = 0;
+        self.notes_layout = None;
         self.notice = "正在检查 GitHub / R2…".into();
         let config = cx.app.config.clone();
         let store = cx.app.repo.store.clone();
@@ -60,124 +64,194 @@ impl Page<Kindlia> for UpdatePage {
             c.render(cx, f);
             return;
         }
-        header(cx, f, "应用更新", true);
+        header(cx, f, "检查更新", true);
         let m = cx.app.metrics;
-        let mut y = m.header_h() + m.margin;
-        label(
-            cx,
-            f,
-            Rect::new(m.margin as i32, y as i32, cx.width - 2 * m.margin, m.touch),
-            &format!("当前版本 {}", env!("CARGO_PKG_VERSION")),
-            false,
-        );
-        y += m.touch;
-        if let Some(r) = &self.release {
-            label(
-                cx,
-                f,
-                Rect::new(m.margin as i32, y as i32, cx.width - 2 * m.margin, m.touch),
-                &format!("最新版本 {} · {}", r.version, r.source),
-                false,
-            );
-            y += m.touch;
-            let lines = r
-                .notes
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .take(7)
-                .map(|l| l.chars().take(36).collect::<String>())
-                .collect::<Vec<_>>();
-            for line in lines {
-                label(
-                    cx,
-                    f,
-                    Rect::new(
-                        m.margin as i32,
-                        y as i32,
-                        cx.width - 2 * m.margin,
-                        (m.body * 1.5) as u32,
-                    ),
-                    &line,
-                    false,
-                );
-                y += (m.body * 1.5) as u32;
-            }
-        }
-        if self.release.as_ref().is_some_and(|r| !r.notes.is_empty()) {
-            button(
-                cx,
-                f,
-                Rect::new(
-                    m.margin as i32,
-                    (cx.height - 4 * m.touch - m.margin) as i32,
-                    cx.width - 2 * m.margin,
-                    m.touch,
-                ),
-                "完整更新说明",
-                4,
-                !self.installing,
-            );
-        }
-        let note = if self.notice.is_empty() {
-            if self
-                .release
-                .as_ref()
-                .is_some_and(|r| crate::update::newer(&r.version))
-            {
-                "发现新版本，安装将保留配置和阅读数据"
-            } else {
-                "已是最新版本"
-            }
-        } else {
-            &self.notice
+        let theme = cx.theme.clone();
+        let side = m.margin as i32;
+        let width = cx.width - 2 * m.margin;
+        let mut ink = kn_ui::widgets::Ink {
+            fonts: cx.fonts,
+            glyphs: cx.glyphs,
+            chain: &cx.app.ui_fonts,
         };
-        label(
-            cx,
-            f,
-            Rect::new(
-                m.margin as i32,
-                (cx.height - 3 * m.touch - m.margin) as i32,
-                cx.width - 2 * m.margin,
-                m.touch,
-            ),
-            note,
-            false,
+        let row_h = (m.body * 1.7) as i32;
+        let pad = m.margin as i32 / 2;
+        let card = Rect::new(
+            side,
+            (m.header_h() + m.margin) as i32,
+            width,
+            (2 * row_h + pad) as u32,
         );
-        button(
-            cx,
-            f,
-            Rect::new(
-                m.margin as i32,
-                (cx.height - 2 * m.touch - m.margin) as i32,
-                cx.width - 2 * m.margin,
-                m.touch,
+        kn_ui::widgets::card(f, &theme, &m, card);
+        for (i, (key, value)) in [
+            ("当前版本", env!("CARGO_PKG_VERSION").to_owned()),
+            (
+                "最新版本",
+                if self.busy && !self.installing {
+                    "正在检查…".into()
+                } else if let Some(r) = &self.release {
+                    format!("{} · 来自 {}", r.version, r.source)
+                } else {
+                    "检查失败".into()
+                },
             ),
-            if self.installed {
-                "完成，退出应用"
-            } else {
-                "下载并安装"
-            },
-            2,
-            !self.busy
-                && (self.installed
-                    || self
-                        .release
-                        .as_ref()
-                        .is_some_and(|r| crate::update::newer(&r.version))),
-        );
-        button(
-            cx,
-            f,
-            Rect::new(
-                m.margin as i32,
-                (cx.height - m.touch - m.margin / 2) as i32,
-                cx.width - 2 * m.margin,
-                m.touch,
-            ),
-            "重新检查",
-            3,
-            !self.busy && !self.installed,
-        );
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = card.y + pad / 2 + i as i32 * row_h + (row_h - (m.body * 1.25) as i32) / 2;
+            ink.text(f, card.x + pad, y, key, m.body, theme.muted);
+            let value = ink.fit(value, m.body, width as f32 * 0.68);
+            let w = ink.width(&value, m.body).ceil() as i32;
+            ink.text(
+                f,
+                card.right() - pad - w,
+                y,
+                &value,
+                m.body,
+                theme.foreground,
+            );
+        }
+        let newer = self
+            .release
+            .as_ref()
+            .is_some_and(|r| crate::update::newer(&r.version));
+        use kn_ui::widgets::ButtonStyle as B;
+        let buttons: Vec<(&str, u32, B)> = if self.installed {
+            vec![("完成，退出应用", 2, B::Primary)]
+        } else if self.installing {
+            vec![("正在下载并安装…", 0, B::Disabled)]
+        } else if self.busy {
+            vec![("返回", 1, B::Secondary)]
+        } else if newer {
+            vec![("以后再说", 1, B::Secondary), ("下载并安装", 2, B::Primary)]
+        } else {
+            vec![("返回", 1, B::Primary), ("重新检查", 3, B::Secondary)]
+        };
+        let button_y = (cx.height - m.margin - m.touch) as i32;
+        let gap = m.margin / 2;
+        let count = buttons.len() as u32;
+        let bw = (width - gap * (count - 1)) / count;
+        for (i, (text, id, style)) in buttons.iter().enumerate() {
+            let rect = Rect::new(side + (i as u32 * (bw + gap)) as i32, button_y, bw, m.touch);
+            kn_ui::widgets::button(&mut ink, f, &theme, &m, rect, text, *style);
+            if *id != 0 {
+                cx.hits.add(kn_ui::HitId(*id), rect).rounded(m.radius);
+            }
+        }
+        let mut y = card.bottom() + m.margin as i32;
+        let bottom = button_y - pad;
+        let line_h = (m.small * 1.6) as i32;
+        let status = if self.busy || !self.notice.is_empty() {
+            self.notice.as_str()
+        } else if newer {
+            "发现新版本；安装将保留配置和阅读数据"
+        } else {
+            "已是最新版本"
+        };
+        for line in wrap(status, &ink, m.small, width as f32)
+            .into_iter()
+            .take(3)
+        {
+            ink.text(f, side, y, &line, m.small, theme.muted);
+            y += line_h;
+        }
+        if self.busy || self.installed {
+            return;
+        }
+        let Some(r) = &self.release else {
+            return;
+        };
+        if self
+            .notes_layout
+            .as_ref()
+            .is_none_or(|(w, size, _)| *w != width || *size != m.small.to_bits())
+        {
+            let changes = r.changes_since(env!("CARGO_PKG_VERSION"));
+            let mut lines = vec![];
+            if newer && changes.len() > 1 {
+                for l in wrap(
+                    &format!(
+                        "从 {} 更新到 {}，包含 {} 个版本的改动",
+                        env!("CARGO_PKG_VERSION"),
+                        r.version,
+                        changes.len()
+                    ),
+                    &ink,
+                    m.small,
+                    width as f32,
+                ) {
+                    lines.push((l, 2));
+                }
+            }
+            for change in changes {
+                let notes = crate::update_notes::plain_notes(&change.notes);
+                if notes.is_empty() {
+                    continue;
+                }
+                if !lines.is_empty() {
+                    lines.push((String::new(), 0));
+                }
+                lines.push((
+                    if change.date.is_empty() {
+                        format!("v{}", change.version)
+                    } else {
+                        format!("v{} · {}", change.version, change.date)
+                    },
+                    1,
+                ));
+                for (text, heading) in notes {
+                    for line in wrap(&text, &ink, m.small, width as f32) {
+                        lines.push((line, if heading { 2 } else { 0 }));
+                    }
+                }
+            }
+            self.notes_layout = Some((width, m.small.to_bits(), lines));
+        }
+        y += pad;
+        let lines = &self.notes_layout.as_ref().unwrap().2;
+        if lines.is_empty() {
+            ink.text(f, side, y, "此版本未提供功能变更说明", m.small, theme.muted);
+            return;
+        }
+        let all_rows = ((bottom - y) / line_h).max(1) as usize;
+        let needs_pager = lines.len() > all_rows;
+        let rows = if needs_pager {
+            ((bottom - y - m.touch as i32) / line_h).max(1) as usize
+        } else {
+            all_rows
+        };
+        let pages = lines.len().div_ceil(rows).max(1);
+        self.notes_page = self.notes_page.min(pages - 1);
+        for (line, style) in lines.iter().skip(self.notes_page * rows).take(rows) {
+            ink.text(
+                f,
+                side,
+                y,
+                line,
+                if *style == 1 { m.body } else { m.small },
+                if *style == 2 {
+                    theme.muted
+                } else {
+                    theme.foreground
+                },
+            );
+            y += line_h;
+        }
+        if pages > 1 {
+            kn_ui::widgets::pager(
+                &mut ink,
+                f,
+                cx.hits,
+                &theme,
+                &m,
+                Rect::new(side, bottom - m.touch as i32, width, m.touch),
+                self.notes_page,
+                pages,
+                kn_ui::HitId(6),
+                kn_ui::HitId(7),
+            );
+        }
     }
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, e: &InputEvent) -> Transition<Kindlia> {
         if let Some(c) = &mut self.confirm {
@@ -229,12 +303,23 @@ impl Page<Kindlia> for UpdatePage {
                 ))
             }
             Some(3) if !self.busy => self.check(cx),
-            Some(4) => {
-                if let Some(r) = &self.release {
-                    return Transition::Push(Box::new(text::TextPage::new("更新说明", &r.notes)));
+            Some(6) => self.notes_page = self.notes_page.saturating_sub(1),
+            Some(7) => self.notes_page = self.notes_page.saturating_add(1),
+            _ => {
+                if !self.busy {
+                    if let InputEvent::Gesture(g) = e {
+                        match g.kind {
+                            kn_platform::GestureKind::SwipeLeft => {
+                                self.notes_page = self.notes_page.saturating_add(1)
+                            }
+                            kn_platform::GestureKind::SwipeRight => {
+                                self.notes_page = self.notes_page.saturating_sub(1)
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
-            _ => {}
         }
         cx.request_redraw(RefreshHint::Ui);
         Transition::None
@@ -243,6 +328,8 @@ impl Page<Kindlia> for UpdatePage {
         let msg = match msg.downcast::<Checked>() {
             Ok(r) => {
                 self.busy = false;
+                self.notes_page = 0;
+                self.notes_layout = None;
                 match r.0 {
                     Ok(release) => {
                         self.release = Some(release);
@@ -279,4 +366,24 @@ impl Page<Kindlia> for UpdatePage {
             cx.request_redraw(RefreshHint::Ui);
         }
     }
+}
+
+/// KinNovel announcement/update wrapping, including hanging Chinese punctuation.
+fn wrap(text: &str, ink: &kn_ui::widgets::Ink, size: f32, width: f32) -> Vec<String> {
+    const NO_LINE_START: &str = "，。、；：！？）」』】》〉”’…—,.;:!?)";
+    let mut lines = vec![];
+    for segment in text.split('\n') {
+        let mut line = String::new();
+        for c in segment.chars() {
+            let mut candidate = line.clone();
+            candidate.push(c);
+            if !line.is_empty() && ink.width(&candidate, size) > width && !NO_LINE_START.contains(c)
+            {
+                lines.push(std::mem::take(&mut line));
+            }
+            line.push(c);
+        }
+        lines.push(line);
+    }
+    lines
 }

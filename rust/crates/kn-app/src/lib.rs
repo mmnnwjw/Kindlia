@@ -20,6 +20,7 @@ pub mod stats;
 pub mod store;
 pub mod tz;
 pub mod update;
+pub mod update_notes;
 pub mod update_install;
 #[cfg(test)]
 mod tests;
