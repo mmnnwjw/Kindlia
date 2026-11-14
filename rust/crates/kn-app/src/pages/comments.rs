@@ -273,8 +273,17 @@ impl Page<Kindlia> for Thread {
             HitId(2),
             HitId(3),
         );
+        tips::show(
+            cx,
+            f,
+            &tips::COMMENTS,
+            self.picker.is_none() && self.editing.is_none() && !self.busy,
+        );
     }
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, e: &InputEvent) -> Transition<Kindlia> {
+        if tips::input(cx, e, &tips::COMMENTS) {
+            return Transition::None;
+        }
         // 按下反馈由运行时负责；等完整手势再修改页面，避免按下/抬起各整页刷新一次。
         if matches!(e, InputEvent::Gesture(g) if g.kind == kn_platform::GestureKind::Down) {
             return Transition::None;

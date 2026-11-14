@@ -429,9 +429,18 @@ impl Page<Kindlia> for ImagePage {
                 self.draw_toolbar(cx, frame);
             }
         }
+        super::tips::show(
+            cx,
+            frame,
+            &super::tips::IMAGE,
+            matches!(self.status, Status::Ready),
+        );
     }
 
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, event: &InputEvent) -> Transition<Kindlia> {
+        if super::tips::input(cx, event, &super::tips::IMAGE) {
+            return Transition::None;
+        }
         let InputEvent::Gesture(g) = event else {
             return match event {
                 InputEvent::Key {

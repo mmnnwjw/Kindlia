@@ -641,23 +641,7 @@ impl ReaderPage {
         } else {
             self.pages.len() + 1
         };
-        let filled = (inner_w as f32 * (self.index + 1) as f32 / total.max(1) as f32) as u32;
-        frame.rounded_rect(
-            track,
-            track_h as u32 / 2,
-            Some(theme.background),
-            Some(theme.mid),
-            2,
-        );
-        if filled > 0 {
-            frame.rounded_rect(
-                Rect::new(side, y, filled.max(track_h as u32), track_h as u32),
-                track_h as u32 / 2,
-                Some(theme.foreground),
-                None,
-                0,
-            );
-        }
+        widgets::progress_bar(frame, &theme, track, (self.index + 1) as f32 / total.max(1) as f32);
         y += track_h + gap;
 
         // 上一章 / 目录 / 设置 / 下一章
@@ -1335,7 +1319,7 @@ impl ReaderPage {
         }
     }
     fn turn(&mut self, cx: &mut Cx<Kindlia>, forward: bool) {
-        if self.target.is_some() {
+        if self.loading || self.chapter.is_none() || self.target.is_some() {
             return;
         }
         let previous = self.index;
@@ -1375,10 +1359,20 @@ impl ReaderPage {
                 }
             }
         }
-        if self.index != previous {
-            let (id, title) = self.stats_book(cx);
-            self.tracker.page(&cx.app.repo.store, &id, &title, false);
+        if self.index == previous {
+            self.notice = if forward {
+                "已经是最后一章"
+            } else {
+                "已经是第一章"
+            }
+            .into();
+            self.menu = true;
+            cx.request_redraw(RefreshHint::Ui);
+            return;
         }
+        self.notice.clear();
+        let (id, title) = self.stats_book(cx);
+        self.tracker.page(&cx.app.repo.store, &id, &title, false);
         kn_platform::display::set_swipe_steps(cx.app.config.swipe_steps.clamp(6, 60));
         cx.request_turn(cx.app.config.page_turn_animation.then_some(if forward {
             kn_platform::SwipeDir::Left
@@ -1577,7 +1571,8 @@ impl Page<Kindlia> for ReaderPage {
         })
     }
     fn flash_on_enter(&self) -> bool {
-        false
+        // 加载中: 等正文就绪再闪刷 (ChapterResult)
+        !self.loading
     }
     fn enter(&mut self, cx: &mut Cx<Kindlia>, returning: bool) {
         crate::sleep::prepare(cx, self.key.clone());
@@ -1666,6 +1661,9 @@ impl Page<Kindlia> for ReaderPage {
         self.save(cx);
         self.sync_history(cx);
         cx.after(Duration::from_secs(30), 1);
+    }
+    fn opaque(&self) -> bool {
+        self.font_loading.is_none() && self.page_bitmaps.iter().any(|(i, _)| *i == self.index)
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, frame: &mut Bitmap) {
         self.drawn_images = None;
@@ -1816,6 +1814,12 @@ impl Page<Kindlia> for ReaderPage {
                 );
             }
         }
+        super::tips::show(
+            cx,
+            frame,
+            &super::tips::READER,
+            !self.menu && self.chapter.is_some(),
+        );
     }
     fn refresh_hint(&self) -> Option<RefreshHint> {
         self.drawn_images
@@ -1907,6 +1911,9 @@ impl Page<Kindlia> for ReaderPage {
         self.paginator.is_some()
     }
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, event: &InputEvent) -> Transition<Kindlia> {
+        if super::tips::input(cx, event, &super::tips::READER) {
+            return Transition::None;
+        }
         if let InputEvent::Key {
             code,
             pressed: true,
@@ -1982,7 +1989,10 @@ impl Page<Kindlia> for ReaderPage {
                 match g.kind {
                     GestureKind::SwipeUp => {
                         self.menu = false;
-                        cx.request_redraw(RefreshHint::Ui);
+                        for r in self.chrome_rects.drain(..) {
+                            cx.request_clean(r);
+                        }
+                        cx.request_ui_redraw(RefreshHint::Clean);
                         return Transition::None;
                     }
                     GestureKind::SwipeLeft | GestureKind::SwipeRight => {
@@ -2040,7 +2050,14 @@ impl Page<Kindlia> for ReaderPage {
                     self.target = self.anchor();
                     self.load(cx, true);
                 }
-                Some(21) => self.menu = false,
+                Some(21) => {
+                    self.menu = false;
+                    for r in self.chrome_rects.drain(..) {
+                        cx.request_clean(r);
+                    }
+                    cx.request_ui_redraw(RefreshHint::Clean);
+                    return Transition::None;
+                }
                 Some(22) | Some(23) => {
                     if let Some(level) = cx.app.light.get(LightProp::Brightness) {
                         let delta = if hit(cx, event) == Some(22) { -1 } else { 1 };
@@ -2059,7 +2076,7 @@ impl Page<Kindlia> for ReaderPage {
                         for r in self.chrome_rects.drain(..) {
                             cx.request_clean(r);
                         }
-                        cx.request_redraw(RefreshHint::Ui);
+                        cx.request_ui_redraw(RefreshHint::Clean);
                     }
                     return Transition::None;
                 }
@@ -2104,7 +2121,7 @@ impl Page<Kindlia> for ReaderPage {
                 GestureKind::SwipeDown => {
                     self.menu = true;
                     cx.app.light.refresh();
-                    cx.request_redraw(RefreshHint::Ui);
+                    cx.request_ui_redraw(RefreshHint::Clean);
                 }
                 GestureKind::Tap => {
                     if g.end.1 < (cx.app.metrics.touch / 2) as i32 {
@@ -2117,7 +2134,7 @@ impl Page<Kindlia> for ReaderPage {
                     } else {
                         self.menu = true;
                         cx.app.light.refresh();
-                        cx.request_redraw(RefreshHint::Ui);
+                        cx.request_ui_redraw(RefreshHint::Clean);
                     }
                 }
                 _ => {}
@@ -2239,6 +2256,9 @@ impl Page<Kindlia> for ReaderPage {
                                 rebuild_started.elapsed().as_secs_f64()*1000.0, self.blocks.len());
                         }
                         self.prefetch(cx);
+                        // 进入阅读器/换章: 正文第一屏闪刷，清掉上一页面与 "正在打开章节…" 的残影。
+                        cx.request_redraw(RefreshHint::Flash);
+                        return;
                     }
                     Err(e) => {
                         self.notice = e;

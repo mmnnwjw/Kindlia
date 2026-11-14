@@ -180,7 +180,7 @@ impl ApiClient {
         let mut headers = vec![
             ("Accept", "application/json".into()),
             ("Content-Type", content.into()),
-            ("User-Agent", "Kindlia/0.2".into()),
+            ("User-Agent", kn_net::http::USER_AGENT.into()),
         ];
         headers.extend(self.gateway_headers());
         if let Some(token) = token.filter(|s| !s.is_empty()) {

@@ -21,6 +21,7 @@ mod view;
 
 struct ListResult(u64, Result<Loaded<ApiPage<NovelOutline>>, String>);
 struct FoldersResult(u64, Result<Vec<serde_json::Value>, String>);
+struct FolderMutation(Result<(), String>);
 struct ShelfResult(Result<Vec<ShelfEntry>, String>);
 struct ClearResult(Result<(), String>);
 struct ArtResult(
@@ -72,6 +73,8 @@ pub struct LibraryPage {
     searching: bool,
     return_on_close: bool,
     picker: Option<(usize, choice::Choice)>,
+    managing_folder: Option<(String, String)>,
+    renaming_folder: bool,
     art: crate::cover_cache::Cache<Option<(crate::covers::Metadata, Bitmap)>>,
 }
 impl LibraryPage {
@@ -104,7 +107,7 @@ impl LibraryPage {
             discover,
             local: false,
             history: false,
-            shelf_source: 0,
+            shelf_source: 1,
             folders: vec![],
             query: ListQuery::default(),
             books: vec![],
@@ -120,14 +123,27 @@ impl LibraryPage {
             searching: false,
             return_on_close: false,
             picker: None,
+            managing_folder: None,
+            renaming_folder: false,
             art: Default::default(),
+        }
+    }
+    pub(super) fn active_tip(&self) -> Option<(&'static tips::Tip, bool)> {
+        if self.editing {
+            Some((&tips::KEYBOARD, true))
+        } else if self.discover {
+            Some((&tips::SEARCH, self.picker.is_none() && !self.loading))
+        } else if !self.history && !self.local {
+            Some((&tips::SHELF, self.picker.is_none() && !self.loading))
+        } else {
+            None
         }
     }
     fn load(&mut self, cx: &mut Cx<Kindlia>, refresh: bool) {
         if self.discover {
             let m = cx.app.metrics;
             let controls = if self.searching {
-                m.touch + m.touch / 4
+                m.option_h()
             } else {
                 m.touch
             };
@@ -163,7 +179,16 @@ impl LibraryPage {
         } else {
             let store = repo.store.clone();
             cx.spawn_local(move || ShelfResult(store.shelf()));
-            if self.shelf_source > 0 && !self.history {
+            if !self.history && !self.local {
+                if !repo.api.signed_in() {
+                    self.folders.clear();
+                    self.loading = false;
+                    self.pages = 1;
+                    self.page = 0;
+                    self.notice = "登录后查看云端收藏夹".into();
+                    cx.request_redraw(RefreshHint::Ui);
+                    return;
+                }
                 let source = self.shelf_source;
                 let generation = self.generation;
                 let poster = cx.page_poster();
@@ -241,12 +266,7 @@ impl Page<Kindlia> for LibraryPage {
         })
     }
     fn enter(&mut self, cx: &mut Cx<Kindlia>, _returning: bool) {
-        if !_returning
-            && !self.local
-            && !self.discover
-            && !self.history
-            && cx.app.repo.api.signed_in()
-        {
+        if !_returning && !self.local && !self.discover && !self.history {
             self.shelf_source = 1;
         }
         if let Some(q) = cx.app.discover_query.take() {
@@ -313,6 +333,23 @@ impl Page<Kindlia> for LibraryPage {
             }
             Err(m) => m,
         };
+        let msg = match msg.downcast::<FolderMutation>() {
+            Ok(r) => {
+                self.loading = false;
+                match r.0 {
+                    Ok(()) => {
+                        cx.toast("操作已完成");
+                        self.load(cx, true);
+                    }
+                    Err(e) => {
+                        self.notice = e;
+                        cx.request_redraw(RefreshHint::Ui);
+                    }
+                }
+                return;
+            }
+            Err(m) => m,
+        };
         let msg = match msg.downcast::<ListResult>() {
             Ok(result) => {
                 if result.0 != self.generation {
@@ -363,7 +400,11 @@ impl Page<Kindlia> for LibraryPage {
                         self.pages = folders.len().div_ceil(self.rows).max(1);
                         self.page = self.page.min(self.pages - 1);
                         self.folders = folders;
-                        self.notice.clear();
+                        self.notice = if self.folders.is_empty() {
+                            "暂无收藏夹".into()
+                        } else {
+                            String::new()
+                        };
                     }
                     Err(e) => self.notice = e,
                 }
@@ -373,7 +414,7 @@ impl Page<Kindlia> for LibraryPage {
             Err(m) => m,
         };
         if let Ok(result) = msg.downcast::<ShelfResult>() {
-            if self.shelf_source == 0 || self.history {
+            if self.local || self.history {
                 self.loading = false;
             }
             match result.0 {
@@ -391,15 +432,13 @@ impl Page<Kindlia> for LibraryPage {
                     } else {
                         entries
                     };
-                    if self.shelf_source == 0 || self.history {
+                    if self.local || self.history {
                         self.pages = self.shelf.len().div_ceil(self.rows).max(1);
-                    }
-                    self.page = self.page.min(self.pages - 1);
-                    if self.shelf_source == 0 || self.history {
+                        self.page = self.page.min(self.pages - 1);
                         self.notice = if self.shelf.is_empty() {
                             "书架为空，请到发现页选书".into()
                         } else {
-                            "本地收藏与最近阅读".into()
+                            String::new()
                         };
                     }
                 }

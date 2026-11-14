@@ -26,7 +26,6 @@ pub fn render(
     cover: Option<&Bitmap>,
     actions: &[(&str, u32, bool)],
     intro_hit: u32,
-    _refresh_hit: Option<u32>,
 ) {
     header(cx, frame, "书籍详情", true);
     let theme = cx.theme;

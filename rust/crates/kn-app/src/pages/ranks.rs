@@ -15,7 +15,7 @@ impl Page<Kindlia> for RankCategories {
         PageId(13)
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, f: &mut Bitmap) {
-        header(cx, f, "发现", false);
+        search_header(cx, f, "发现", false, 20);
         let m = cx.app.metrics;
         let mut ink = kn_ui::widgets::Ink {
             fonts: cx.fonts,
@@ -66,6 +66,7 @@ impl Page<Kindlia> for RankCategories {
             return t;
         }
         match hit(cx, e) {
+            Some(20) => Transition::Push(Box::new(library::LibraryPage::search(String::new()))),
             Some(50) => Transition::Root(Box::new(library::LibraryPage::discover())),
             Some(51) => Transition::Root(Box::new(cloud::CloudPage::root(cloud::Mode::Wenku(
                 String::new(),

@@ -391,7 +391,8 @@ impl Page<Kindlia> for SettingsPage {
         } else {
             match self.group {
                 0 => format!(
-                    "修改即时保存\n字体目录：/mnt/us/extensions/kindlia/fonts\n当前字体：{}",
+                    "修改即时保存\n字体目录：{}\n当前字体：{}",
+                    cx.app.repo.store.root.join("fonts").display(),
                     self.value(Field::Font)
                 ),
                 1 => "UI 模式即时生效；全屏翻页/清理间隔/休眠封面重启生效".into(),
@@ -534,6 +535,8 @@ impl Page<Kindlia> for SettingsPage {
             Some(id) if (10..15).contains(&id) => {
                 self.group = (id - 10) as usize;
                 self.notice.clear();
+                cx.request_ui_redraw(RefreshHint::Clean);
+                return Transition::None;
             }
             Some(id) if id >= 100 => {
                 if let Some((field, _)) = fields(self.group).get(((id - 100) / 4) as usize) {
@@ -646,6 +649,7 @@ impl Page<Kindlia> for SettingsPage {
                                 self.draft.operation_tips = !self.draft.operation_tips;
                                 if self.draft.operation_tips {
                                     self.draft.tips_seen.clear();
+                                    cx.app.tips_later.clear();
                                 }
                             }
                             IgnoreJapanese => {

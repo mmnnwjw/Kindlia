@@ -7,6 +7,8 @@ use rustls::ClientConfig;
 use crate::error::NetError;
 use crate::stream::NetStream;
 
+pub const USER_AGENT: &str = concat!("Kindlia/", env!("CARGO_PKG_VERSION"));
+
 /// Parsed `scheme://host[:port]` pieces of a server URL (`config.py`'s
 /// `api_server`, e.g. `https://api.lightnovel.life`).
 pub struct ServerUrl {
@@ -138,7 +140,7 @@ pub fn download_with_headers(
     for _ in 0..4 {
         let (server, path) = split_url(&url)?;
         let mut headers = vec![
-            ("User-Agent", "Kindlia/1.1".into()),
+            ("User-Agent", USER_AGENT.into()),
             ("Accept", "*/*".into()),
         ];
         if server == origin {
@@ -250,7 +252,7 @@ pub fn download_resumable_headers(
         } else {
             String::new()
         };
-        let req = format!("GET {path} HTTP/1.1\r\nHost: {}\r\nUser-Agent: Kindlia/0.2\r\nAccept: */*\r\nAccept-Encoding: identity\r\n{range}{extra}Connection: close\r\n\r\n",parsed.host_header());
+        let req = format!("GET {path} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {USER_AGENT}\r\nAccept: */*\r\nAccept-Encoding: identity\r\n{range}{extra}Connection: close\r\n\r\n",parsed.host_header());
         if let Err(e) = stream
             .write_all(req.as_bytes())
             .and_then(|_| stream.flush())

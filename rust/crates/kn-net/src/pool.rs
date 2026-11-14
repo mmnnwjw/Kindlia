@@ -143,10 +143,14 @@ pub(crate) fn request(
 }
 
 fn line(reader: &mut BufReader<NetStream>, budget: &mut usize) -> Result<String, NetError> {
+    let is_start = *budget == 64 * 1024;
     let mut bytes = Vec::new();
     let n = reader
         .take((*budget + 1) as u64)
         .read_until(b'\n', &mut bytes)?;
+    if n == 0 && bytes.is_empty() && is_start {
+        return Err(NetError::network("对端关闭连接"));
+    }
     if n == 0 || n > *budget || !bytes.ends_with(b"\r\n") {
         return Err(NetError::protocol("HTTP 行截断或过长"));
     }

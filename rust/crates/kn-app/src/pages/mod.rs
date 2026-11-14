@@ -11,8 +11,8 @@ pub mod library;
 pub mod light;
 pub mod lock;
 pub mod login;
-pub mod manage;
 pub mod me;
+pub mod tips;
 pub mod ranks;
 pub mod reader;
 pub mod settings;
@@ -246,37 +246,22 @@ pub fn option_button(
 ) {
     let m = cx.app.metrics;
     let r = control_rect(cx.width, m.margin, rect);
-    frame.rounded_rect(
-        r,
-        m.radius,
-        Some(cx.theme.background),
-        Some(cx.theme.foreground),
-        2,
-    );
     let mut ink = Ink {
         fonts: cx.fonts,
         glyphs: cx.glyphs,
         chain: &cx.app.ui_fonts,
     };
-    let title = ink.fit(title, m.body, (r.w.saturating_sub(12)) as f32);
-    let value = ink.fit(value, m.small, (r.w.saturating_sub(12)) as f32);
-    ink.text_centered(
+    widgets::option_button(
+        &mut ink,
         frame,
-        Rect::new(r.x, r.y, r.w, r.h * 3 / 5),
-        &title,
-        m.body,
-        cx.theme.foreground,
+        cx.hits,
+        &cx.theme,
+        &m,
+        r,
+        title,
+        value,
+        HitId(id),
     );
-    ink.text_centered(
-        frame,
-        Rect::new(r.x, r.y + (r.h * 3 / 5) as i32, r.w, r.h * 2 / 5),
-        &value,
-        m.small,
-        cx.theme.muted,
-    );
-    cx.hits
-        .add(HitId(id), control_rect(cx.width, m.margin, rect))
-        .rounded(m.radius);
 }
 pub fn button(
     cx: &mut Cx<Kindlia>,

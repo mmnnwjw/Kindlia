@@ -24,8 +24,9 @@ Kindlia are not implied to be distributed here.
 - rime-pinyin-simp dictionary, Apache-2.0:
   https://github.com/rime/rime-pinyin-simp. Embedded as `kn-ime/data/pinyin.br`;
   upstream license in `rust/crates/kn-ime/data/LICENSE-rime-pinyin-simp`.
-- zhconv-rs (GPL-2.0-or-later) embeds OpenCC conversion data; see
-  https://github.com/Gowee/zhconv-rs and https://github.com/BYVoid/OpenCC.
+- OpenCC conversion tables (TS/ST phrases and characters), Apache-2.0:
+  https://github.com/BYVoid/OpenCC. Embedded as `kn-app/data/opencc-t2s.br` and
+  `kn-app/data/opencc-s2t.br`.
 - Default cover: https://n-cdn.novelia.cc/static/no_cover.c90924af53e4.webp,
   bundled at the user's request as assets/no_cover.webp; artwork rights remain
   with its respective owner.

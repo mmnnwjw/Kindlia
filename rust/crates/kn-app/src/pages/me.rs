@@ -90,7 +90,7 @@ impl Page<Kindlia> for MePage {
                 Rect::new(0, (start + i as u32 * m.row_h()) as i32, w, m.row_h()),
                 t,
                 "",
-                "",
+                ">",
                 Some(*id),
             );
         }

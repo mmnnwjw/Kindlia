@@ -92,7 +92,6 @@ impl CloudPage {
                             ("评论", 11, !self.loading),
                         ],
                         41,
-                        Some(12),
                     );
                     return;
                 }
@@ -128,17 +127,11 @@ impl CloudPage {
         }
 
         if matches!(self.mode, Mode::Wenku(..)) {
-            search_header(
-                cx,
-                frame,
-                if self.searching {
-                    "搜索文库小说"
-                } else {
-                    "发现"
-                },
-                self.searching || !self.root,
-                10,
-            );
+            if self.searching {
+                header(cx, frame, "搜索文库小说", true);
+            } else {
+                search_header(cx, frame, "发现", !self.root, 10);
+            }
         } else {
             header(
                 cx,
@@ -179,7 +172,7 @@ impl CloudPage {
                 );
                 y + m.touch
             } else {
-                y
+                y + (m.margin / 4).max(4)
             }
         } else if matches!(self.mode, Mode::Wenku(..)) && self.searching {
             let level = if let Mode::Wenku(_, l) = self.mode {
@@ -190,12 +183,12 @@ impl CloudPage {
             option_button(
                 cx,
                 frame,
-                Rect::new(m.margin as i32, y as i32, w - 2 * m.margin, m.touch),
+                Rect::new(m.margin as i32, y as i32, w - 2 * m.margin, m.option_h()),
                 "分级",
                 WENKU_LEVELS[level.min(6)],
                 11,
             );
-            y + m.touch + m.touch / 4
+            y + m.option_h()
         } else if matches!(self.mode, Mode::Wenku(..)) {
             let mut ink = Ink {
                 fonts: cx.fonts,
@@ -236,48 +229,21 @@ impl CloudPage {
             } else {
                 vec![]
             };
-            let n = fields.len() as u32;
-            let cell = w / n;
-            let height = m.touch + m.touch / 4;
+            let n = fields.len().max(1) as u32;
+            let height = m.option_h();
             for (i, field) in fields.iter().enumerate() {
                 let (name, options, selected) = self.rank_choices(*field);
                 let value = options.get(selected).map(String::as_str).unwrap_or("");
-                let rect = Rect::new((i as u32 * cell) as i32, y as i32, cell, height).inflate(-5);
-                let mut ink = Ink {
-                    fonts: cx.fonts,
-                    glyphs: cx.glyphs,
-                    chain: &cx.app.ui_fonts,
-                };
-                frame.rounded_rect(
-                    rect,
-                    m.radius,
-                    Some(cx.theme.background),
-                    Some(cx.theme.foreground),
-                    2,
-                );
-                ink.text_centered(
+                let rx = (i as u32 * w / n) as i32;
+                let rw = ((i as u32 + 1) * w / n) as i32 - rx;
+                option_button(
+                    cx,
                     frame,
-                    Rect::new(rect.x, rect.y, rect.w, rect.h * 3 / 5),
+                    Rect::new(rx, y as i32, rw.max(1) as u32, height),
                     name,
-                    m.body,
-                    cx.theme.foreground,
+                    value,
+                    80 + *field as u32,
                 );
-                let text = ink.fit(value, m.small, (rect.w - m.margin / 2) as f32);
-                ink.text_centered(
-                    frame,
-                    Rect::new(
-                        rect.x,
-                        rect.y + (rect.h * 3 / 5) as i32,
-                        rect.w,
-                        rect.h * 2 / 5,
-                    ),
-                    &text,
-                    m.small,
-                    cx.theme.muted,
-                );
-                cx.hits
-                    .add(HitId(80 + *field as u32), rect)
-                    .enabled(!self.loading);
             }
             y + height
         } else if matches!(self.mode, Mode::History) {
@@ -301,13 +267,15 @@ impl CloudPage {
                     !self.loading,
                 );
             }
-            label(
-                cx,
-                frame,
-                Rect::new(0, (y + m.touch) as i32, w, m.touch),
-                &self.notice,
-                true,
-            );
+            if !self.items.is_empty() && !self.notice.is_empty() {
+                label(
+                    cx,
+                    frame,
+                    Rect::new(0, (y + m.touch) as i32, w, m.touch),
+                    &self.notice,
+                    true,
+                );
+            }
             y + m.touch * 2
         };
         let volume_catalog = self.book_catalog && matches!(self.mode, Mode::WenkuBook(_));
@@ -403,6 +371,45 @@ impl CloudPage {
                         "",
                     );
                     cx.hits.add(kn_ui::HitId(200 + i as u32), rect).long_press();
+                } else if matches!(self.mode, Mode::Comments(..)) {
+                    let side = m.margin as i32;
+                    let text_w = (rect.w as i32 - 2 * side).max(1) as f32;
+                    let author_h = (m.small * 1.25) as i32;
+                    let body_h = (m.body * 1.3) as i32;
+                    let gap = (m.small * 0.25) as i32;
+                    let mut ink = Ink {
+                        fonts: cx.fonts,
+                        glyphs: cx.glyphs,
+                        chain: &cx.app.ui_fonts,
+                    };
+                    let mut lines = widgets::wrap(&ink, &item.subtitle, m.body, text_w);
+                    let truncated = lines.len() > 2;
+                    lines.truncate(2);
+                    if truncated {
+                        if let Some(last) = lines.last_mut() {
+                            last.push('…');
+                            *last = ink.fit(last, m.body, text_w);
+                        }
+                    }
+                    let total_h = author_h + gap + lines.len() as i32 * body_h;
+                    let mut ty = rect.y + (rect.h as i32 - total_h) / 2;
+                    let header_text = ink.fit(&item.title, m.small, text_w);
+                    ink.text(frame, rect.x + side, ty, &header_text, m.small, cx.theme.muted);
+                    ty += author_h + gap;
+                    for line in &lines {
+                        ink.text(frame, rect.x + side, ty, line, m.body, cx.theme.foreground);
+                        ty += body_h;
+                    }
+                    frame.fill_rect(
+                        Rect::new(
+                            rect.x + side,
+                            rect.bottom() - 1,
+                            (rect.w as i32 - 2 * side).max(0) as u32,
+                            1,
+                        ),
+                        cx.theme.mid,
+                    );
+                    cx.hits.add(HitId(200 + i as u32), rect);
                 } else {
                     row(
                         cx,
@@ -415,11 +422,16 @@ impl CloudPage {
                     );
                 }
             }
+            let bottom = if self.tab().is_some() {
+                m.tab_bar_h()
+            } else {
+                0
+            };
             if let Mode::Rank(p, _) = &self.mode {
                 if p == "syosetu" {
                     let rect = Rect::new(
                         0,
-                        cx.height.saturating_sub(m.tab_bar_h() + m.pager_h()) as i32,
+                        cx.height.saturating_sub(bottom + m.pager_h()) as i32,
                         w,
                         m.pager_h(),
                     );
@@ -442,20 +454,10 @@ impl CloudPage {
                         HitId(3),
                     );
                 } else {
-                    pager(cx, frame, self.page, self.pages, m.tab_bar_h());
+                    pager(cx, frame, self.page, self.pages, bottom);
                 }
             } else {
-                pager(
-                    cx,
-                    frame,
-                    self.page,
-                    self.pages,
-                    if self.tab().is_some() {
-                        m.tab_bar_h()
-                    } else {
-                        0
-                    },
-                );
+                pager(cx, frame, self.page, self.pages, bottom);
             }
             if let Some(tab) = self.tab() {
                 draw_tabs(cx, frame, tab);
@@ -477,6 +479,9 @@ impl CloudPage {
                 "输入内容",
                 "确定",
             );
+        }
+        if let Some((tip, when)) = self.active_tip() {
+            super::tips::show(cx, frame, tip, when);
         }
     }
 }

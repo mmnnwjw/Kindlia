@@ -357,7 +357,7 @@ impl Page<Kindlia> for LoginPage {
                 cx.hits.add(HIT_SKIP, sr).rounded(m.radius);
                 y = sr.bottom() + gap;
                 let note = ink.fit(
-                    "不登录也能浏览最新、排行和分类，之后可在「我的」里登录",
+                    "不登录也能浏览 Web小说、文库小说和排行，之后可在「我的」里登录",
                     m.small,
                     width as f32,
                 );
@@ -380,6 +380,7 @@ impl Page<Kindlia> for LoginPage {
                 theme.muted,
             );
         }
+        super::tips::show(cx, frame, &super::tips::KEYBOARD, self.focus.is_some());
     }
 
     fn take_transition(&mut self) -> Transition<Kindlia> {
@@ -407,6 +408,9 @@ impl Page<Kindlia> for LoginPage {
     }
 
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, event: &InputEvent) -> Transition<Kindlia> {
+        if super::tips::input(cx, event, &super::tips::KEYBOARD) {
+            return Transition::None;
+        }
         let InputEvent::Gesture(g) = event else {
             return Transition::None;
         };

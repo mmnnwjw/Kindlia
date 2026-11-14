@@ -199,6 +199,10 @@ impl Metrics {
     pub fn pager_h(&self) -> u32 {
         self.touch
     }
+
+    pub fn option_h(&self) -> u32 {
+        (self.touch as f32 * 1.48).round() as u32
+    }
 }
 
 /// 底部标签栏。标签的命中 id 为 first_id + 序号。返回标签栏矩形。
@@ -429,4 +433,209 @@ pub fn state_message(ink: &mut Ink, frame: &mut Bitmap, hits: &mut Hits, theme: 
         button(ink, frame, theme, m, r, label, ButtonStyle::Primary);
         hits.add(id, r).rounded(m.radius);
     }
+}
+
+/// 按字符宽折行, 保留显式换行并避免常见标点出现在行首。
+pub fn wrap(ink: &Ink, text: &str, size: f32, max_width: f32) -> Vec<String> {
+    const NO_LINE_START: &str = "，。、；：！？）」』】》〉”’…—,.;:!?)";
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let mut lines = Vec::new();
+    for segment in text.split('\n') {
+        let mut current = String::new();
+        for ch in segment.chars() {
+            let mut candidate = current.clone();
+            candidate.push(ch);
+            if ink.width(&candidate, size) > max_width && !current.is_empty() && !NO_LINE_START.contains(ch) {
+                lines.push(std::mem::take(&mut current));
+            }
+            current.push(ch);
+        }
+        lines.push(current);
+    }
+    lines
+}
+
+/// 选项胶囊按钮: 内边距居中两行 (顶部 muted 标签 + 底部 foreground 值), 不与圆角边框碰撞。
+#[allow(clippy::too_many_arguments)]
+pub fn option_button(ink: &mut Ink, frame: &mut Bitmap, hits: &mut Hits, theme: &Theme, m: &Metrics, rect: Rect, name: &str, value: &str, id: HitId) {
+    frame.rounded_rect(rect, m.radius, Some(theme.background), Some(theme.foreground), 2);
+    let pad = (m.margin / 6).max(6) as i32;
+    let inner = rect.inflate(-pad);
+    let name_h = (m.tiny * 1.25).round() as i32;
+    let val_h = (m.small * 1.25).round() as i32;
+    let gap = (m.tiny * 0.35).round() as i32;
+    let total = name_h + gap + val_h;
+    let top = inner.y + ((inner.h as i32 - total) / 2).max(0);
+    ink.text_centered(frame, Rect::new(inner.x, top, inner.w, name_h.max(1) as u32), name, m.tiny, theme.muted);
+    ink.text_centered(frame, Rect::new(inner.x, top + name_h + gap, inner.w, val_h.max(1) as u32), value, m.small, theme.foreground);
+    hits.add(id, rect).rounded(m.radius);
+}
+
+/// 胶囊进度条 (ratio 夹在 0.0..=1.0)。
+pub fn progress_bar(frame: &mut Bitmap, theme: &Theme, rect: Rect, ratio: f32) {
+    let radius = (rect.h / 2).max(2);
+    if rect.h >= 8 {
+        frame.rounded_rect(rect, radius, Some(theme.background), Some(theme.mid), 2);
+    } else {
+        frame.rounded_rect(rect, radius, Some(theme.mid), None, 0);
+    }
+    let clamped = ratio.clamp(0.0, 1.0);
+    if clamped > 0.0 {
+        let fill_w = ((rect.w as f32 * clamped).round() as u32).max(rect.h).min(rect.w);
+        if fill_w > 0 {
+            frame.rounded_rect(Rect::new(rect.x, rect.y, fill_w, rect.h), radius, Some(theme.foreground), None, 0);
+        }
+    }
+}
+
+/// −/＋ 按钮: 符号用矩形画 (系统字体里的全角 −/＋ 太小, 半角又太细)。
+pub fn sign_button(frame: &mut Bitmap, theme: &Theme, m: &Metrics, rect: Rect, plus: bool, enabled: bool) {
+    frame.rounded_rect(rect, m.radius, Some(theme.background), Some(theme.foreground), 2);
+    let color = if enabled { theme.foreground } else { theme.muted };
+    let len = (rect.w.min(rect.h) as f32 * 0.36) as i32;
+    let thick = (4.0 * m.scale).max(3.0) as i32;
+    let (cx, cy) = (rect.x + rect.w as i32 / 2, rect.y + rect.h as i32 / 2);
+    frame.fill_rect(Rect::new(cx - len / 2, cy - thick / 2, len as u32, thick as u32), color);
+    if plus {
+        frame.fill_rect(Rect::new(cx - thick / 2, cy - len / 2, thick as u32, len as u32), color);
+    }
+}
+
+/// 滑条有效轨道矩形 (两端各留半个滑块直径, 端点也能点中)。
+pub fn track_rect(area: Rect, knob: i32) -> Rect {
+    Rect::new(area.x + knob / 2, area.y, (area.w as i32 - knob).max(1) as u32, area.h)
+}
+
+/// 滑条调节行: 名称 + 数值 | − | 进度滑条 | ＋。
+#[allow(clippy::too_many_arguments)]
+pub fn slider_row(ink: &mut Ink, frame: &mut Bitmap, hits: &mut Hits, theme: &Theme, m: &Metrics, area: Rect, label: &str, value_text: &str, label_w: i32, value: i32, max: i32, down_id: HitId, slider_id: HitId, up_id: HitId) {
+    let btn = area.h as i32;
+    let gap = (m.margin as f32 * 0.5) as i32;
+    let knob = (btn as f32 * 0.42) as i32;
+    let track_h = (10.0 * m.scale).max(8.0) as i32;
+    if label_w > 0 {
+        let text_y = area.y + (btn - (m.small * 1.25) as i32) / 2;
+        ink.text(frame, area.x, text_y, label, m.small, theme.foreground);
+        let vw = ink.width(value_text, m.small).ceil() as i32;
+        ink.text(frame, area.x + label_w - gap - vw, text_y, value_text, m.small, theme.muted);
+    }
+    let minus = Rect::new(area.x + label_w, area.y, btn as u32, btn as u32);
+    let plus = Rect::new(area.right() - btn, area.y, btn as u32, btn as u32);
+    sign_button(frame, theme, m, minus, false, value > 0);
+    hits.add(down_id, minus).rounded(m.radius).enabled(value > 0);
+    sign_button(frame, theme, m, plus, true, value < max);
+    hits.add(up_id, plus).rounded(m.radius).enabled(value < max);
+
+    let slider_area = Rect::new(minus.right() + gap, area.y, (plus.x - gap - minus.right() - gap).max(1) as u32, btn as u32);
+    let track = track_rect(slider_area, knob);
+    let ty = area.y + (btn - track_h) / 2;
+    let ratio = if max > 0 { value as f32 / max as f32 } else { 0.0 };
+    progress_bar(frame, theme, Rect::new(track.x, ty, track.w, track_h as u32), ratio);
+    let fx = track.x + (track.w as f32 * ratio.clamp(0.0, 1.0)).round() as i32;
+    let k = Rect::new(fx - knob / 2, area.y + (btn - knob) / 2, knob as u32, knob as u32);
+    frame.rounded_rect(k, knob as u32 / 2, Some(theme.background), Some(theme.foreground), 3);
+    hits.add(slider_id, slider_area).no_feedback();
+}
+
+/// 分页选择框每页可显示行数。
+pub fn menu_dialog_rows(height: u32, m: &Metrics) -> usize {
+    (height.saturating_sub(6 * m.margin + 3 * m.touch) / m.touch).max(1) as usize
+}
+
+/// 居中分页选择对话框 (两项 ["取消", X] 自动走横向双按钮确认框)。
+#[allow(clippy::too_many_arguments)]
+pub fn menu_dialog(ink: &mut Ink, frame: &mut Bitmap, hits: &mut Hits, theme: &Theme, m: &Metrics, title: &str, options: &[String], selected: Option<usize>, page: usize, cancel_id: HitId, prev_id: HitId, next_id: HitId, option_base: u32) -> Rect {
+    let (fw, fh) = (frame.width(), frame.height());
+    hits.add(cancel_id, frame.bounds()).no_feedback();
+    if options.len() == 2 && options.first().is_some_and(|s| s == "取消") {
+        return dialog(
+            ink,
+            frame,
+            hits,
+            theme,
+            m,
+            title,
+            &[],
+            &[(&options[0], HitId(option_base), ButtonStyle::Secondary), (&options[1], HitId(option_base + 1), ButtonStyle::Primary)],
+        );
+    }
+    let rows = menu_dialog_rows(fh, m);
+    let pages = options.len().div_ceil(rows).max(1);
+    let page = page.min(pages - 1);
+    let visible = options.len().saturating_sub(page * rows).min(rows);
+    let has_cancel = options.iter().skip(page * rows).take(rows).any(|text| text == "取消");
+    let w = fw * 4 / 5;
+    let h = 2 * m.margin + m.touch * (visible as u32 + 1 + u32::from(!has_cancel) + u32::from(pages > 1));
+    let r = Rect::new(((fw - w) / 2) as i32, ((fh - h) / 2) as i32, w, h);
+    frame.rounded_rect(r, m.radius, Some(theme.background), Some(theme.foreground), 3);
+    hits.add(HitId(u32::MAX), r).no_feedback();
+    let pad = m.margin as i32;
+    let inner_w = w - 2 * m.margin;
+    let x = r.x + pad;
+    let mut y = r.y + pad;
+    ink.text_centered(frame, Rect::new(x, y, inner_w, m.touch), title, m.small, theme.foreground);
+    y += m.touch as i32;
+    for (i, text) in options.iter().enumerate().skip(page * rows).take(rows) {
+        let br = Rect::new(x, y, inner_w, m.touch).inflate(-5);
+        let style = if selected == Some(i) { ButtonStyle::Primary } else { ButtonStyle::Secondary };
+        button(ink, frame, theme, m, br, text, style);
+        hits.add(HitId(option_base + i as u32), br).rounded(m.radius);
+        y += m.touch as i32;
+    }
+    if pages > 1 {
+        pager(ink, frame, hits, theme, m, Rect::new(r.x, y, w, m.touch), page, pages, prev_id, next_id);
+        y += m.touch as i32;
+    }
+    if !has_cancel {
+        let br = Rect::new(x, y, inner_w, m.touch).inflate(-5);
+        button(ink, frame, theme, m, br, "取消", ButtonStyle::Secondary);
+        hits.add(cancel_id, br).rounded(m.radius);
+    }
+    r
+}
+
+/// 操作提示模态卡片: 居中卡片、自动折行条目、「感觉会忘记 / 我知道了」双按钮。
+#[allow(clippy::too_many_arguments)]
+pub fn tip_dialog(ink: &mut Ink, frame: &mut Bitmap, hits: &mut Hits, theme: &Theme, m: &Metrics, title: &str, lines: &[&str], later_id: HitId, ok_id: HitId) -> Rect {
+    let (fw, fh) = (frame.width(), frame.height());
+    let w = ((fw as f32 * 0.88) as u32).min(fw.saturating_sub(m.margin));
+    let pad = m.margin as i32;
+    let inner = (w as i32 - 2 * pad).max(1);
+    let bullet = "·  ";
+    let bullet_w = ink.width(bullet, m.body).ceil() as i32;
+    let line_h = (m.body * 1.45) as i32;
+    let para_gap = (m.body * 0.45) as i32;
+    let wrapped: Vec<Vec<String>> = lines.iter().map(|l| wrap(ink, l, m.body, (inner - bullet_w).max(1) as f32)).collect();
+    let text_h: i32 = wrapped.iter().map(|p| p.len() as i32 * line_h + para_gap).sum();
+    let title_h = (m.title * 1.6) as i32;
+    let btn_h = m.touch as i32;
+    let h = pad + title_h + pad / 3 + text_h + pad / 2 + btn_h + pad;
+    let rect = Rect::new((fw - w) as i32 / 2, ((fh as i32 - h) / 2).max(0), w, h as u32);
+    hits.add(HitId(u32::MAX), frame.bounds()).no_feedback();
+    frame.rounded_rect(rect, m.radius, Some(theme.background), Some(theme.foreground), 3);
+    let mut y = rect.y + pad;
+    ink.text_centered(frame, Rect::new(rect.x + pad, y, inner as u32, title_h as u32), &format!("操作提示 · {title}"), m.title, theme.foreground);
+    y += title_h + pad / 3;
+    for para in &wrapped {
+        for (i, line) in para.iter().enumerate() {
+            if i == 0 {
+                ink.text(frame, rect.x + pad, y, bullet, m.body, theme.foreground);
+            }
+            ink.text(frame, rect.x + pad + bullet_w, y, line, m.body, theme.foreground);
+            y += line_h;
+        }
+        y += para_gap;
+    }
+    y += pad / 2;
+    let gap = pad / 2;
+    let bw = ((inner - gap) / 2).max(0) as u32;
+    let buttons = [(later_id, "感觉会忘记", ButtonStyle::Secondary), (ok_id, "我知道了", ButtonStyle::Primary)];
+    for (i, (id, label, style)) in buttons.into_iter().enumerate() {
+        let r = Rect::new(rect.x + pad + i as i32 * (bw as i32 + gap), y, bw, btn_h as u32);
+        button(ink, frame, theme, m, r, label, style);
+        hits.add(id, r).rounded(m.radius);
+    }
+    rect
 }

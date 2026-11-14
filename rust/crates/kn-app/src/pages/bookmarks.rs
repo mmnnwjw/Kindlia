@@ -165,8 +165,12 @@ impl Page<Kindlia> for BookmarksPage {
             self.items.len().div_ceil(self.rows).max(1),
             0,
         );
+        tips::show(cx, f, &tips::BOOKMARKS, self.confirm.is_none());
     }
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, e: &InputEvent) -> Transition<Kindlia> {
+        if tips::input(cx, e, &tips::BOOKMARKS) {
+            return Transition::None;
+        }
         // 按下反馈由运行时负责；等完整手势再修改页面，避免按下/抬起各整页刷新一次。
         if matches!(e, InputEvent::Gesture(g) if g.kind == kn_platform::GestureKind::Down) {
             return Transition::None;

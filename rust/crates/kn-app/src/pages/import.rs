@@ -20,7 +20,7 @@ impl Default for ImportPage {
             page: 0,
             rows: 6,
             busy: false,
-            notice: "请把 EPUB/TXT 放到 /mnt/us/extensions/kindlia/books".into(),
+            notice: String::new(),
             pending: None,
         }
     }
@@ -32,7 +32,7 @@ impl Page<Kindlia> for ImportPage {
     fn enter(&mut self, cx: &mut Cx<Kindlia>, _: bool) {
         let dir = cx.app.repo.store.root.join("books");
         let _ = std::fs::create_dir_all(&dir);
-        self.files = std::fs::read_dir(dir)
+        self.files = std::fs::read_dir(&dir)
             .into_iter()
             .flatten()
             .flatten()
@@ -48,6 +48,16 @@ impl Page<Kindlia> for ImportPage {
             })
             .collect();
         self.files.sort();
+        if self.notice.is_empty()
+            || self.notice.starts_with("请把 EPUB/TXT")
+            || self.notice.starts_with("目录：")
+        {
+            self.notice = if self.files.is_empty() {
+                format!("请把 EPUB/TXT 放到 {}", dir.display())
+            } else {
+                format!("目录：{}（点选书籍导入）", dir.display())
+            };
+        }
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, f: &mut Bitmap) {
         header(cx, f, "导入本地小说", true);

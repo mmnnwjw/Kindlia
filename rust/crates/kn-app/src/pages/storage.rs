@@ -232,7 +232,7 @@ impl Page<Kindlia> for StoragePage {
                 }
                 Err(e) => self.notice = e,
             }
-            cx.request_redraw(RefreshHint::Ui);
+            cx.request_ui_redraw(RefreshHint::Clean);
         }
     }
 }

@@ -58,6 +58,14 @@ struct CachedResult(ResultMessage);
 struct Mutation(Result<(), String>);
 struct EpubResult(Result<NovelKey, String>);
 struct CoverResult(String, Result<Bitmap, String>, bool);
+enum CloudConfirm {
+    FolderMenu {
+        wenku: bool,
+        id: String,
+        title: String,
+    },
+    DeletePath(String),
+}
 
 pub struct CloudPage {
     mode: Mode,
@@ -80,6 +88,8 @@ pub struct CloudPage {
     searching: bool,
     return_on_close: bool,
     choice: Option<(u8, choice::Choice)>,
+    confirm: Option<CloudConfirm>,
+    rename_target: Option<String>,
     edit_kind: u8,
     pending: Option<Transition<Kindlia>>,
     covers: crate::cover_cache::Cache<Option<Bitmap>>,
@@ -183,9 +193,20 @@ impl CloudPage {
             searching: false,
             return_on_close: false,
             choice: None,
+            confirm: None,
+            rename_target: None,
             edit_kind: 0,
             pending: None,
             covers: Default::default(),
+        }
+    }
+    fn active_tip(&self) -> Option<(&'static tips::Tip, bool)> {
+        if self.editing {
+            Some((&tips::KEYBOARD, true))
+        } else if matches!(self.mode, Mode::Wenku(..)) {
+            Some((&tips::SEARCH, self.choice.is_none() && !self.loading))
+        } else {
+            None
         }
     }
     fn name(&self) -> &str {
@@ -219,7 +240,7 @@ impl CloudPage {
         if matches!(self.mode, Mode::Wenku(..)) {
             let m = cx.app.metrics;
             let controls = if self.searching {
-                m.touch + m.touch / 4
+                m.option_h()
             } else {
                 m.touch
             };
@@ -317,17 +338,8 @@ impl CloudPage {
             Mode::Folders(wenku, _) => {
                 let section = if *wenku { "wenku" } else { "web" };
                 if self.edit_kind == 2 {
-                    if let Some(Item {
-                        action: Action::Folder(id),
-                        ..
-                    }) = self.items.get(self.page * self.rows)
-                    {
-                        self.mutate(
-                            cx,
-                            "PUT",
-                            format!("user/favored-{section}/{}", encode(id)),
-                            json!({"title":text}),
-                        );
+                    if let Some(path) = self.rename_target.take() {
+                        self.mutate(cx, "PUT", path, json!({"title":text}));
                     }
                 } else {
                     self.mutate(
@@ -370,7 +382,7 @@ impl Page<Kindlia> for CloudPage {
         let m = cx.app.metrics;
         let controls = match self.mode {
             Mode::Favorites(..) => 0,
-            Mode::Rank(..) => m.touch + m.touch / 4,
+            Mode::Rank(..) => m.option_h(),
             Mode::History | Mode::Wenku(..) => m.touch,
             _ => m.touch * 2,
         };

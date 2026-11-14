@@ -6,6 +6,11 @@ impl CloudPage {
         cx: &mut Cx<Kindlia>,
         event: &InputEvent,
     ) -> Transition<Kindlia> {
+        if let Some((tip, _)) = self.active_tip() {
+            if super::tips::input(cx, event, tip) {
+                return Transition::None;
+            }
+        }
         // 按下反馈由运行时负责；等完整手势再修改页面，避免按下/抬起各整页刷新一次。
         if matches!(event, InputEvent::Gesture(g) if g.kind == kn_platform::GestureKind::Down) {
             return Transition::None;
@@ -67,16 +72,69 @@ impl CloudPage {
                             self.rank_remote = 0;
                             self.load(cx);
                         }
+                        20 => {
+                            match n {
+                                0 => {
+                                    if let Some(CloudConfirm::FolderMenu { wenku, id, title }) =
+                                        self.confirm.take()
+                                    {
+                                        self.rename_target = Some(format!(
+                                            "user/favored-{}/{}",
+                                            if wenku { "wenku" } else { "web" },
+                                            encode(&id)
+                                        ));
+                                        self.editor(&title, 2);
+                                    }
+                                }
+                                1 => {
+                                    if let Some(CloudConfirm::FolderMenu { wenku, id, .. }) =
+                                        self.confirm.take()
+                                    {
+                                        self.confirm = Some(CloudConfirm::DeletePath(format!(
+                                            "user/favored-{}/{}",
+                                            if wenku { "wenku" } else { "web" },
+                                            encode(&id)
+                                        )));
+                                        self.choice = Some((
+                                            21,
+                                            choice::Choice::new(
+                                                "删除收藏夹？",
+                                                ["取消", "删除"],
+                                                Some(0),
+                                            ),
+                                        ));
+                                    }
+                                }
+                                _ => self.confirm = None,
+                            }
+                        }
+                        21 => {
+                            let pending = self.confirm.take();
+                            if n == 1 {
+                                if let Some(CloudConfirm::DeletePath(path)) = pending {
+                                    self.mutate(cx, "DELETE", path, Value::Null);
+                                }
+                            }
+                        }
                         _ => {}
                     }
                     cx.request_redraw(RefreshHint::Clean);
                 }
                 choice::Event::Cancel => {
+                    if *kind == 20 || *kind == 21 {
+                        self.confirm = None;
+                    }
                     self.choice = None;
                     cx.request_redraw(RefreshHint::Clean);
                 }
                 _ => {}
             }
+            return Transition::None;
+        }
+        if hit(cx, event) == Some(1) && self.editing && !self.searching {
+            self.editing = false;
+            self.rename_target = None;
+            cx.request_redraw(RefreshHint::Clean);
             return Transition::None;
         }
         if hit(cx, event) == Some(1) && self.searching {
@@ -254,9 +312,17 @@ impl CloudPage {
                                 None
                             }
                         }) {
-                            return Transition::Push(Box::new(manage::ManagePage::remove(
-                                format!("user/favored-wenku/{}/{}", encode(folder), encode(&id)),
+                            self.confirm = Some(CloudConfirm::DeletePath(format!(
+                                "user/favored-wenku/{}/{}",
+                                encode(folder),
+                                encode(&id)
                             )));
+                            self.choice = Some((
+                                21,
+                                choice::Choice::new("从云收藏移出？", ["取消", "移出"], Some(0)),
+                            ));
+                            cx.request_redraw(RefreshHint::Ui);
+                            return Transition::None;
                         }
                         return Transition::Push(Box::new(Self::new(Mode::Folders(
                             true,
@@ -415,7 +481,7 @@ impl CloudPage {
             }
             _ => {}
         }
-        // 长按收藏夹进入重命名/删除确认页；长按收藏项目移出所在收藏夹。
+        // 长按收藏夹打开操作弹窗；长按收藏或历史条目弹出移除确认。
         if let InputEvent::Gesture(g) = event {
             if g.kind == GestureKind::Long {
                 if let Some(id) = cx
@@ -426,7 +492,10 @@ impl CloudPage {
                     })
                     .filter(|i| i.0 >= 200 && i.0 < 1000)
                 {
-                    let offset = if matches!(self.mode, Mode::Folders(..)) {
+                    let offset = if matches!(
+                        self.mode,
+                        Mode::Folders(..) | Mode::WenkuBook(_) | Mode::Rank(..)
+                    ) {
                         self.page * self.rows
                     } else {
                         0
@@ -434,15 +503,21 @@ impl CloudPage {
                     if let Some(item) = self.items.get(offset + (id.0 - 200) as usize) {
                         match (&self.mode, &item.action) {
                             (Mode::Folders(w, _), Action::Folder(id)) => {
-                                return Transition::Push(Box::new(
-                                    super::manage::ManagePage::folder(
-                                        *w,
-                                        id.clone(),
-                                        item.title.clone(),
+                                self.confirm = Some(CloudConfirm::FolderMenu {
+                                    wenku: *w,
+                                    id: id.clone(),
+                                    title: item.title.clone(),
+                                });
+                                self.choice = Some((
+                                    20,
+                                    choice::Choice::new(
+                                        &item.title,
+                                        ["重命名收藏夹", "删除收藏夹", "取消"],
+                                        None,
                                     ),
-                                ))
+                                ));
                             }
-                            (Mode::Favorites(w, f), a) => {
+                            (Mode::Favorites(_, f), a) => {
                                 let path = match a {
                                     Action::Web(k) => format!(
                                         "user/favored-web/{}/{}/{}",
@@ -456,20 +531,31 @@ impl CloudPage {
                                     _ => String::new(),
                                 };
                                 if !path.is_empty() {
-                                    return Transition::Push(Box::new(
-                                        super::manage::ManagePage::remove(path),
+                                    self.confirm = Some(CloudConfirm::DeletePath(path));
+                                    self.choice = Some((
+                                        21,
+                                        choice::Choice::new(
+                                            "从云收藏移出？",
+                                            ["取消", "移出"],
+                                            Some(0),
+                                        ),
                                     ));
                                 }
-                                let _ = w;
                             }
                             (Mode::History, Action::Web(k)) => {
-                                return Transition::Push(Box::new(
-                                    super::manage::ManagePage::remove(format!(
-                                        "user/read-history/{}/{}",
-                                        encode(&k.provider_id),
-                                        encode(&k.novel_id)
-                                    )),
-                                ))
+                                self.confirm = Some(CloudConfirm::DeletePath(format!(
+                                    "user/read-history/{}/{}",
+                                    encode(&k.provider_id),
+                                    encode(&k.novel_id)
+                                )));
+                                self.choice = Some((
+                                    21,
+                                    choice::Choice::new(
+                                        "从历史记录移出？",
+                                        ["取消", "移出"],
+                                        Some(0),
+                                    ),
+                                ));
                             }
                             _ => {}
                         }

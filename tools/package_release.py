@@ -1,9 +1,10 @@
 """打包现成的 Kindle 二进制；不部署到设备、不携带用户数据。"""
 from pathlib import Path
 import argparse
-import zipfile
 import struct
+import sys
 import tomllib
+import zipfile
 version = tomllib.loads((Path(__file__).resolve().parents[1] / "rust/Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
 
 root = Path(__file__).resolve().parents[1]
@@ -25,6 +26,17 @@ if phsize < 32 or phoff + phsize * phnum > len(elf):
     parser.error('Invalid ELF program header table')
 if any(struct.unpack_from('<I', elf, phoff + i * phsize)[0] == 3 for i in range(phnum)):
     parser.error('Expected a statically linked binary without an ELF interpreter')
+EXECUTABLE = {'kindlia/bin/kindlia', 'kindlia/bin/kindlia.sh'}
+
+
+def write_entry(out: zipfile.ZipFile, target: str, data: bytes) -> None:
+    info = zipfile.ZipInfo(target, date_time=(2026, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.create_system = 3
+    info.external_attr = (0o100755 if target in EXECUTABLE else 0o100644) << 16
+    out.writestr(info, data)
+
+
 args.output.parent.mkdir(parents=True, exist_ok=True)
 with zipfile.ZipFile(args.output, 'w', zipfile.ZIP_DEFLATED) as out:
     for source, target in [
@@ -45,7 +57,12 @@ with zipfile.ZipFile(args.output, 'w', zipfile.ZIP_DEFLATED) as out:
             text = source.read_bytes()
             for name in ('LICENSE-LXGW', 'LICENSE-NotoEmoji'):
                 text += ('\n\n# ' + name + '\n\n').encode() + (root / 'rust/crates/kn-app/data' / name).read_bytes()
-            out.writestr(target, text)
+            write_entry(out, target, text)
         else:
-            out.write(source, target)
+            write_entry(out, target, source.read_bytes())
+with zipfile.ZipFile(args.output, 'r') as check:
+    for name in EXECUTABLE:
+        mode = (check.getinfo(name).external_attr >> 16) & 0o777
+        if mode != 0o755:
+            sys.exit(f'{name} expected mode 0o755, got {oct(mode)}')
 print(args.output.resolve())

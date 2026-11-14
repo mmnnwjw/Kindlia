@@ -118,7 +118,8 @@ pub struct Config {
     pub landscape_side: String,
     pub sleep_cover: bool,
     pub operation_tips: bool,
-    pub tips_seen: Vec<u16>,
+    #[serde(default, deserialize_with = "deserialize_tips_seen")]
+    pub tips_seen: Vec<String>,
     pub ignore_japanese: bool,
     pub ignore_ai: bool,
     pub cache_limit_mb: u32,
@@ -215,6 +216,29 @@ impl Config {
         )
         .map_err(|e| e.to_string())
     }
+}
+
+fn deserialize_tips_seen<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Item {
+        Str(String),
+        Int(u64),
+    }
+    let items = Vec::<Item>::deserialize(deserializer)?;
+    Ok(items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Str(s) => Some(s),
+            Item::Int(30) => Some("reader".into()),
+            Item::Int(11) => Some("search".into()),
+            Item::Int(58) => Some("comments".into()),
+            Item::Int(_) => None,
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

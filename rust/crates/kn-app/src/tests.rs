@@ -582,16 +582,88 @@ fn navigation_does_not_wait_for_history_response() {
     let (root,mut ui)=modal_test_ui();
     ui.app().repo.api=api::ApiClient::new(&base,5,false).unwrap();
     {let mut s=ui.app().repo.api.session.lock().unwrap();s.username="test".into();s.token="synthetic-test".into();}
-    ui.app().repo.offline=false;
-    ui.push(Box::new(pages::cloud::CloudPage::new(pages::cloud::Mode::History)));
+    ui.app().repo.offline = false;
+    ui.push(Box::new(pages::cloud::CloudPage::root(
+        pages::cloud::Mode::History,
+    )));
     arrived_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-    let waiting=ui.frame().0;
-    let at=Instant::now();tap_ui(&mut ui,550,775);let next=ui.frame().0;let elapsed=at.elapsed();
-    let _=release_tx.send(());server.join().unwrap();
-    assert_ne!(waiting.data(),next.data(),"History swallowed intentional navigation");
-    assert!(elapsed<Duration::from_secs(1),"navigation waited for network: {elapsed:?}");
+    let waiting = ui.frame().0;
+    let at = Instant::now();
+    tap_ui(&mut ui, 550, 775);
+    let next = ui.frame().0;
+    let elapsed = at.elapsed();
+    let _ = release_tx.send(());
+    server.join().unwrap();
+    assert_ne!(
+        waiting.data(),
+        next.data(),
+        "History swallowed intentional navigation"
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "navigation waited for network: {elapsed:?}"
+    );
     eprintln!("history blocked response: navigation {elapsed:?}");
-    ui.settle(Duration::from_millis(200));drop(ui);std::fs::remove_dir_all(root).unwrap();
+    ui.settle(Duration::from_millis(200));
+    drop(ui);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn non_root_history_back_does_not_wait_for_response() {
+    use std::{
+        io::{Read, Write},
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (arrived_tx, arrived_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut bytes = [0; 4096];
+        let _ = stream.read(&mut bytes);
+        arrived_tx.send(()).unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]"
+        );
+    });
+    let (root, mut ui) = modal_test_ui();
+    let base = format!("http://{addr}");
+    ui.app().repo.api = api::ApiClient::new(&base, 5, false).unwrap();
+    {
+        let mut s = ui.app().repo.api.session.lock().unwrap();
+        s.username = "tester".into();
+        s.token = "synthetic".into();
+    }
+    ui.app().repo.offline = false;
+    ui.push(Box::new(pages::cloud::CloudPage::new(
+        pages::cloud::Mode::History,
+    )));
+    arrived_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let waiting = ui.frame().0;
+    let at = Instant::now();
+    tap_ui(&mut ui, 20, 20);
+    let next = ui.frame().0;
+    let elapsed = at.elapsed();
+    let _ = release_tx.send(());
+    server.join().unwrap();
+    assert_ne!(
+        waiting.data(),
+        next.data(),
+        "Non-root history swallowed back navigation"
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "back navigation waited for network: {elapsed:?}"
+    );
+    ui.settle(Duration::from_millis(200));
+    drop(ui);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -664,4 +736,275 @@ fn account_status_does_not_wait_for_login_network() {
     assert!(response.is_ok(),"UI account status waited for an unrelated login HTTP response");
     assert!(login_result.is_err(),"old login overwrote a newer logout");
     assert!(!logout_api.signed_in());
+}
+
+#[test]
+fn config_load_migrates_legacy_u64_tips_seen_and_preserves_string_keys() {
+    let root=temporary();
+    std::fs::write(root.join("config.toml"),"tips_seen = [30, 11, 58]\n").unwrap();
+    let legacy=store::Config::load(&root).unwrap();
+    assert_eq!(legacy.tips_seen,vec!["reader","search","comments"]);
+    std::fs::write(root.join("config.toml"),"tips_seen = [\"shelf\", \"keyboard\"]\n").unwrap();
+    let modern=store::Config::load(&root).unwrap();
+    assert_eq!(modern.tips_seen,vec!["shelf","keyboard"]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn tips_modal_lifecycle_later_got_it_and_settings_reset() {
+    let root=temporary();
+    let mut fonts=kn_render::FontStore::new();
+    let font=fonts.load_file(std::path::Path::new("C:/Windows/Fonts/arial.ttf")).unwrap();
+    let config=store::Config{api_base_url:"https://example.com".into(),offline:true,operation_tips:true,welcome_skipped:true,..Default::default()};
+    let app=Kindlia::new(root.clone(),config.clone(),vec![font],1236,1648,300,kn_platform::Frontlight::detect(None)).unwrap();
+    let mut ui=kn_ui::Headless::new(app,fonts,1236,1648).unwrap();
+    ui.push(Box::new(pages::library::LibraryPage::shelf()));
+    ui.settle(std::time::Duration::from_millis(200));
+    let _=ui.frame();
+    assert_eq!(ui.app().tip_open,Some("shelf"));
+
+    let later=ui.hits().rect_of(kn_ui::HitId(u32::MAX-2)).unwrap();
+    tap_ui(&mut ui,later.x+later.w as i32/2,later.y+later.h as i32/2);
+    assert_eq!(ui.app().tip_open,None);
+    assert!(ui.app().tips_later.contains("shelf"));
+    assert!(!ui.app().config.tips_seen.iter().any(|k| k=="shelf"));
+    drop(ui);
+
+    // 模拟重启: tips_later 清空，「感觉会忘记」的提示再次弹出, 点「我知道了」持久化写入 config.toml。
+    let reloaded=store::Config::load(&root).unwrap();
+    let mut fonts2=kn_render::FontStore::new();
+    let font2=fonts2.load_file(std::path::Path::new("C:/Windows/Fonts/arial.ttf")).unwrap();
+    let app=Kindlia::new(root.clone(),reloaded,vec![font2],1236,1648,300,kn_platform::Frontlight::detect(None)).unwrap();
+    let mut ui=kn_ui::Headless::new(app,fonts2,1236,1648).unwrap();
+    ui.push(Box::new(pages::library::LibraryPage::shelf()));
+    ui.settle(std::time::Duration::from_millis(200));
+    let _=ui.frame();
+    assert_eq!(ui.app().tip_open,Some("shelf"));
+
+    let ok=ui.hits().rect_of(kn_ui::HitId(u32::MAX-1)).unwrap();
+    tap_ui(&mut ui,ok.x+ok.w as i32/2,ok.y+ok.h as i32/2);
+    assert_eq!(ui.app().tip_open,None);
+    assert!(ui.app().config.tips_seen.iter().any(|k| k=="shelf"));
+    assert!(store::Config::load(&root).unwrap().tips_seen.iter().any(|k| k=="shelf"));
+
+    // 设置里重开「操作提示」时同时清空 tips_seen 与 tips_later。
+    ui.app().tips_later.insert("keyboard");
+    let settings=Box::new(pages::settings::SettingsPage::new(ui.app()));
+    ui.push(settings);
+    let _=ui.frame();
+    let disp=ui.hits().rect_of(kn_ui::HitId(11)).unwrap();
+    tap_ui(&mut ui,disp.x+disp.w as i32/2,disp.y+disp.h as i32/2);
+    let _=ui.frame();
+    let toggle=ui.hits().rect_of(kn_ui::HitId(138)).unwrap();
+    tap_ui(&mut ui,toggle.x+toggle.w as i32/2,toggle.y+toggle.h as i32/2);
+    assert!(!ui.app().config.operation_tips);
+    let _=ui.frame();
+    let toggle=ui.hits().rect_of(kn_ui::HitId(138)).unwrap();
+    tap_ui(&mut ui,toggle.x+toggle.w as i32/2,toggle.y+toggle.h as i32/2);
+    assert!(ui.app().config.operation_tips);
+    assert!(ui.app().config.tips_seen.is_empty());
+    assert!(ui.app().tips_later.is_empty());
+    drop(ui);std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn folder_long_press_opens_centered_choice_dialog() {
+    let (root,mut ui)=modal_test_ui();
+    {
+        let mut s=ui.app().repo.api.session.lock().unwrap();
+        s.username="u".into();
+        s.token="tok".into();
+    }
+    ui.app().repo.store.write_cache("cloud",&("folders","u"),&serde_json::json!({"favoredWeb":[{"id":"f1","title":"默认收藏夹"}]})).unwrap();
+    ui.push(Box::new(pages::library::LibraryPage::shelf()));
+    ui.settle(std::time::Duration::from_millis(200));
+    let _=ui.frame();
+    let folder=ui.hits().rect_of(kn_ui::HitId(200)).unwrap();
+    let (fx,fy)=(folder.x+folder.w as i32/2,folder.y+folder.h as i32/2);
+    ui.input(&kn_platform::InputEvent::Gesture(kn_platform::Gesture{kind:kn_platform::GestureKind::Long,start:(fx,fy),end:(fx,fy),duration_ms:800}));
+    let _=ui.frame();
+    assert!(ui.hits().rect_of(kn_ui::HitId(710_000)).is_some(),"重命名收藏夹 option missing from centered Choice");
+    assert!(ui.hits().rect_of(kn_ui::HitId(710_001)).is_some(),"删除收藏夹 option missing from centered Choice");
+    assert!(ui.hits().rect_of(kn_ui::HitId(710_002)).is_some(),"取消 option missing from centered Choice");
+    drop(ui);std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn web_discover_and_book_detail_render_default_cover() {
+    use std::{
+        io::{Read, Write},
+        time::Duration,
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let body = if req.contains("GET /api/novel/syosetu/n1234 ") {
+                serde_json::json!({
+                    "wenkuId": null,
+                    "titleJp": "Test Web Novel",
+                    "titleZh": "测试Web小说",
+                    "authors": [{"name": "作者甲", "link": null}],
+                    "type": "连载中",
+                    "attentions": [],
+                    "keywords": [],
+                    "totalCharacters": 12000,
+                    "introductionJp": "Intro",
+                    "introductionZh": "简介内容",
+                    "glossary": {},
+                    "toc": [],
+                    "visited": 1,
+                    "syncAt": 0,
+                    "favored": null,
+                    "lastReadChapterId": null,
+                    "jp": 0,
+                    "baidu": 0,
+                    "youdao": 0,
+                    "gpt": 0,
+                    "sakura": 0
+                })
+                .to_string()
+            } else {
+                serde_json::json!({
+                    "items": [{
+                        "providerId": "syosetu",
+                        "novelId": "n1234",
+                        "titleJp": "Test Web Novel",
+                        "titleZh": "测试Web小说",
+                        "authors": ["作者甲"],
+                        "type": "连载中",
+                        "attentions": [],
+                        "keywords": [],
+                        "total": 10,
+                        "jp": 10,
+                        "baidu": 0,
+                        "youdao": 10,
+                        "gpt": 0,
+                        "sakura": 0
+                    }],
+                    "pageNumber": 1
+                })
+                .to_string()
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+        }
+    });
+
+    let matches_fallback = |frame: &kn_render::Bitmap, slot: kn_render::Rect| {
+        let img = covers::fallback((slot.w, slot.h)).unwrap();
+        let ox = slot.x + (slot.w as i32 - img.width() as i32) / 2;
+        let oy = slot.y + (slot.h as i32 - img.height() as i32) / 2;
+        let fw = frame.width() as usize;
+        (0..img.height() as usize).all(|y| {
+            let fy = (oy + y as i32) as usize;
+            let row = y * img.width() as usize;
+            (0..img.width() as usize).all(|x| {
+                let fx = (ox + x as i32) as usize;
+                frame.data()[fy * fw + fx] == img.data()[row + x]
+            })
+        })
+    };
+
+    let (root, mut ui) = modal_test_ui();
+    ui.app().repo.api = api::ApiClient::new(&base, 5, false).unwrap();
+    ui.app().repo.offline = false;
+
+    ui.push(Box::new(pages::library::LibraryPage::discover()));
+    ui.settle(Duration::from_millis(400));
+    let _ = ui.frame();
+    ui.settle(Duration::from_millis(400));
+    let m = ui.app().metrics;
+    let discover_frame = ui.frame().0;
+    let row0 = ui.hits().rect_of(kn_ui::HitId(200)).unwrap();
+    let slot0 = kn_ui::widgets::cover_slot(&m, row0);
+    assert!(
+        matches_fallback(&discover_frame, slot0),
+        "web discover row did not render fallback default cover"
+    );
+
+    let key = model::NovelKey {
+        provider_id: "syosetu".into(),
+        novel_id: "n1234".into(),
+    };
+    ui.push(Box::new(pages::book::BookPage::new(key)));
+    ui.settle(Duration::from_millis(400));
+    ui.settle(Duration::from_millis(400));
+    let w = (600_f32 * 0.26) as u32;
+    let detail_slot = kn_render::Rect::new(
+        m.margin as i32,
+        m.header_h() as i32 + m.margin as i32 / 2,
+        w,
+        (w as f32 * 1.42) as u32,
+    );
+    let detail_frame = ui.frame().0;
+    assert!(
+        matches_fallback(&detail_frame, detail_slot),
+        "web book detail page did not render fallback default cover"
+    );
+
+    drop(ui);
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn shelf_removes_local_and_manage_tabs() {
+    let (root, mut ui) = modal_test_ui();
+    ui.push(Box::new(pages::library::LibraryPage::shelf()));
+    ui.settle(std::time::Duration::from_millis(200));
+    let _ = ui.frame();
+    assert!(ui.hits().rect_of(kn_ui::HitId(60)).is_some(), "Web收藏 tab missing");
+    assert!(ui.hits().rect_of(kn_ui::HitId(61)).is_some(), "文库收藏 tab missing");
+    assert!(ui.hits().rect_of(kn_ui::HitId(23)).is_none(), "本地 tab should be removed");
+    assert!(ui.hits().rect_of(kn_ui::HitId(62)).is_none(), "管理收藏 tab should be removed");
+    assert!(ui.hits().rect_of(kn_ui::HitId(64)).is_some(), "signed-out shelf should offer login action");
+
+    {
+        let mut s = ui.app().repo.api.session.lock().unwrap();
+        s.username = "u".into();
+        s.token = "tok".into();
+    }
+    ui.app()
+        .repo
+        .store
+        .write_cache(
+            "cloud",
+            &("folders", "u"),
+            &serde_json::json!({
+                "favoredWeb": [{"id": "w1", "title": "Web默认"}],
+                "favoredWenku": [{"id": "k1", "title": "文库默认"}]
+            }),
+        )
+        .unwrap();
+    ui.push(Box::new(pages::library::LibraryPage::shelf()));
+    ui.settle(std::time::Duration::from_millis(200));
+    let _ = ui.frame();
+    assert!(ui.hits().rect_of(kn_ui::HitId(23)).is_none());
+    assert!(ui.hits().rect_of(kn_ui::HitId(62)).is_none());
+    assert!(ui.hits().rect_of(kn_ui::HitId(64)).is_none());
+    assert!(ui.hits().rect_of(kn_ui::HitId(200)).is_some(), "Web收藏 folder row missing");
+    let wenku_tab = ui.hits().rect_of(kn_ui::HitId(61)).unwrap();
+    tap_ui(
+        &mut ui,
+        wenku_tab.x + wenku_tab.w as i32 / 2,
+        wenku_tab.y + wenku_tab.h as i32 / 2,
+    );
+    ui.settle(std::time::Duration::from_millis(200));
+    let _ = ui.frame();
+    assert!(ui.hits().rect_of(kn_ui::HitId(200)).is_some(), "文库收藏 folder row missing");
+    drop(ui);
+    std::fs::remove_dir_all(root).unwrap();
 }

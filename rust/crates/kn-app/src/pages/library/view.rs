@@ -6,18 +6,10 @@ impl LibraryPage {
             picker.render(cx, frame);
             return;
         }
-        if self.discover {
-            search_header(
-                cx,
-                frame,
-                if self.searching {
-                    "搜索Web小说"
-                } else {
-                    "发现"
-                },
-                self.searching,
-                20,
-            );
+        if self.discover && self.searching {
+            header(cx, frame, "搜索Web小说", true);
+        } else if self.discover {
+            search_header(cx, frame, "发现", false, 20);
         } else {
             header(
                 cx,
@@ -27,7 +19,7 @@ impl LibraryPage {
                 } else if self.history {
                     "历史"
                 } else {
-                    "我的收藏"
+                    "书架"
                 },
                 self.local,
             );
@@ -35,7 +27,11 @@ impl LibraryPage {
         let m = cx.app.metrics;
         let width = cx.width;
         let mut y = m.header_h();
-        if !self.discover && !self.history && self.shelf.iter().any(|b| b.progress.is_some()) {
+        if !self.discover
+            && !self.history
+            && !self.local
+            && self.shelf.iter().any(|b| b.progress.is_some())
+        {
             let rect = Rect::new(
                 m.margin as i32,
                 (y + m.margin / 2) as i32,
@@ -116,19 +112,13 @@ impl LibraryPage {
                 .unwrap_or_default();
             if let Some(p) = current.filter(|p| p.pages > 0) {
                 let width = (rect.right() - pad - x).max(1) as u32;
-                let bar = Rect::new(x, rect.bottom() - pad - 6, width, 5);
-                frame.rounded_rect(bar, 2, Some(cx.theme.muted), None, 0);
-                frame.rounded_rect(
-                    Rect::new(
-                        bar.x,
-                        bar.y,
-                        (bar.w as f64 * (p.page as f64 / p.pages as f64).clamp(0., 1.)) as u32,
-                        bar.h,
-                    ),
-                    2,
-                    Some(cx.theme.foreground),
-                    None,
-                    0,
+                let bar_h = (8.0 * m.scale).round().max(6.0) as u32;
+                let bar = Rect::new(x, rect.bottom() - pad - bar_h as i32, width, bar_h);
+                widgets::progress_bar(
+                    frame,
+                    &cx.theme,
+                    bar,
+                    (p.page as f32 / p.pages as f32).clamp(0.0, 1.0),
                 );
             }
             let subtitle = ink.fit(&subtitle, m.small, (rect.right() - pad - x).max(1) as f32);
@@ -172,16 +162,15 @@ impl LibraryPage {
                         (field as u32 * width / 5) as i32,
                         y as i32,
                         width / 5,
-                        m.touch + m.touch / 4,
+                        m.option_h(),
                     ),
                     &name,
                     &options[selected],
                     71 + field as u32,
                 );
             }
-            y += m.touch + m.touch / 4;
+            y += m.option_h();
         }
-        let cell = width / 3;
         if self.local {
             button(
                 cx,
@@ -193,29 +182,21 @@ impl LibraryPage {
             );
             y += m.touch;
         } else if !self.discover && !self.history {
-            selected_button(
-                cx,
+            let mut ink = Ink {
+                fonts: cx.fonts,
+                glyphs: cx.glyphs,
+                chain: &cx.app.ui_fonts,
+            };
+            widgets::segmented(
+                &mut ink,
                 frame,
-                Rect::new(0, y as i32, cell, m.touch),
-                "Web收藏",
+                cx.hits,
+                &cx.theme,
+                &m,
+                Rect::new(m.margin as i32, y as i32, width - 2 * m.margin, m.touch),
+                &["Web收藏", "文库收藏"],
+                usize::from(self.shelf_source == 2),
                 60,
-                self.shelf_source == 1,
-            );
-            selected_button(
-                cx,
-                frame,
-                Rect::new(cell as i32, y as i32, cell, m.touch),
-                "文库收藏",
-                61,
-                self.shelf_source == 2,
-            );
-            button(
-                cx,
-                frame,
-                Rect::new((cell * 2) as i32, y as i32, cell, m.touch),
-                "管理收藏",
-                62,
-                !self.loading,
             );
             y += m.touch;
         } else if self.history {
@@ -230,16 +211,25 @@ impl LibraryPage {
             y += m.touch;
         }
         let top = y;
-        let folder_h = if self.shelf_source > 0 && !self.history {
+        let show_folders = !self.discover && !self.history && !self.local;
+        let folder_h = if show_folders {
             m.row_h()
         } else {
             m.row_h_cover()
         };
+        let empty = if self.discover {
+            self.books.is_empty()
+        } else if show_folders {
+            self.folders.is_empty()
+        } else {
+            self.shelf.is_empty()
+        };
         // 常态不保留空白提示行；错误/查询信息在列表底部显示。
-        if !self.notice.is_empty()
+        if !empty
+            && !self.notice.is_empty()
             && self.notice != "我的收藏"
             && !self.loading
-            && (self.folders.is_empty() || self.discover || self.history)
+            && !show_folders
         {
             label(
                 cx,
@@ -266,7 +256,7 @@ impl LibraryPage {
                     },
             ) / folder_h)
                 .max(1) as usize;
-            self.pages = if self.shelf_source > 0 && !self.history {
+            self.pages = if show_folders {
                 self.folders.len()
             } else {
                 self.shelf.len()
@@ -276,14 +266,8 @@ impl LibraryPage {
             self.page = self.page.min(self.pages - 1);
         }
         if !self.editing {
-            let empty = if self.discover {
-                self.books.is_empty()
-            } else if self.shelf_source > 0 && !self.history {
-                self.folders.is_empty()
-            } else {
-                self.shelf.is_empty()
-            };
             if empty {
+                let need_login = show_folders && !cx.app.repo.api.signed_in();
                 state_message(
                     cx,
                     frame,
@@ -300,14 +284,20 @@ impl LibraryPage {
                                 },
                         ),
                     ),
-                    if self.loading {
+                    if need_login {
+                        "登录后查看云端收藏夹"
+                    } else if self.loading {
                         "加载中…"
-                    } else if self.notice.is_empty() {
-                        "暂无书籍"
-                    } else {
+                    } else if !self.notice.is_empty() {
                         &self.notice
+                    } else if show_folders {
+                        "暂无收藏夹"
+                    } else {
+                        "暂无书籍"
                     },
-                    if self.loading {
+                    if need_login {
+                        Some(("去登录", 64))
+                    } else if self.loading {
                         None
                     } else if self.local {
                         Some(("导入本地小说", 30))
@@ -354,7 +344,7 @@ impl LibraryPage {
                     );
                     cx.hits.add(HitId(200 + i as u32), rect).long_press();
                 }
-            } else if self.shelf_source > 0 && !self.history {
+            } else if show_folders {
                 for (i, folder) in self
                     .folders
                     .iter()
@@ -370,12 +360,6 @@ impl LibraryPage {
                         "长按管理",
                         200 + i as u32,
                     );
-                    cx.hits
-                        .add(
-                            HitId(200 + i as u32),
-                            Rect::new(0, (top + folder_h * i as u32) as i32, width, folder_h),
-                        )
-                        .long_press();
                 }
             } else {
                 for (i, book) in self
@@ -459,9 +443,16 @@ impl LibraryPage {
                 &cx.theme,
                 &m,
                 Rect::new(0, cx.height.saturating_sub(h) as i32, width, h),
-                "小说关键词",
-                "搜索",
+                if self.renaming_folder {
+                    "收藏夹名称"
+                } else {
+                    "小说关键词"
+                },
+                if self.renaming_folder { "保存" } else { "搜索" },
             );
+        }
+        if let Some((tip, when)) = self.active_tip() {
+            super::tips::show(cx, frame, tip, when);
         }
     }
 }

@@ -55,6 +55,8 @@ pub struct Kindlia {
     pub lock_showing: bool,
     pub sleep_request: Option<model::NovelKey>,
     pub sleep_image: Option<kn_render::Bitmap>,
+    pub tips_later: std::collections::HashSet<&'static str>,
+    pub tip_open: Option<&'static str>,
 }
 impl Kindlia {
     pub fn new(
@@ -105,6 +107,8 @@ impl Kindlia {
             lock_showing: false,
             sleep_request: None,
             sleep_image: None,
+            tips_later: Default::default(),
+            tip_open: None,
         })
     }
     pub fn unlock(&mut self) {
@@ -226,32 +230,6 @@ impl App for Kindlia {
             self.lock_pending = false;
             self.lock_showing = true;
             return kn_ui::Transition::Push(Box::new(pages::lock::LockPage::resume()));
-        }
-        if self.config.operation_tips && !self.config.tips_seen.contains(&_top.0) {
-            let text = match _top.0 {
-                30 => Some(
-                    "左右边缘点按或滑动翻页。
-点按中部或从顶部下滑呼出阅读菜单。
-目录返回保留当前阅读页；长按书签按钮管理书签。",
-                ),
-                11 => Some(
-                    "右上角搜索图标进入搜索。
-左上角返回图标退出搜索；筛选按钮弹出选项列表。",
-                ),
-                58 => Some(
-                    "评论全文和缩进回复依次显示。
-点按具体评论选择回复；自己的评论可编辑或删除。",
-                ),
-                _ => None,
-            };
-            if let Some(text) = text {
-                self.config.tips_seen.push(_top.0);
-                let _ = self.save_config();
-                return kn_ui::Transition::Push(Box::new(pages::text::TextPage::new(
-                    "操作提示",
-                    text,
-                )));
-            }
         }
         kn_ui::Transition::None
     }

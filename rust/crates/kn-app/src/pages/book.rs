@@ -11,6 +11,7 @@ use std::any::Any;
 
 struct NovelResult(Result<Loaded<Novel>, String>);
 struct FavoriteResult(Result<(), String>);
+struct Mutation(Result<(), String>);
 struct CoverResult(Result<Bitmap, String>);
 pub struct BookPage {
     key: NovelKey,
@@ -25,6 +26,7 @@ pub struct BookPage {
     pending_back: bool,
     cover: Option<Bitmap>,
     tags: Option<choice::Choice>,
+    confirm_remove: Option<(String, choice::Choice)>,
     refresh_favorite: bool,
     current_chapter: Option<String>,
     located: bool,
@@ -44,6 +46,7 @@ impl BookPage {
             pending_back: false,
             cover: None,
             tags: None,
+            confirm_remove: None,
             refresh_favorite: false,
             current_chapter: None,
             located: false,
@@ -108,16 +111,23 @@ impl Page<Kindlia> for BookPage {
         self.tags
             .as_ref()
             .map(|p| p.wants_backdrop())
+            .or_else(|| self.confirm_remove.as_ref().map(|(_, p)| p.wants_backdrop()))
             .unwrap_or(kn_ui::Backdrop::None)
     }
     fn set_backdrop(&mut self, bg: Option<Bitmap>) {
         if let Some(p) = self.tags.as_mut() {
+            p.set_backdrop(bg);
+        } else if let Some((_, p)) = self.confirm_remove.as_mut() {
             p.set_backdrop(bg);
         }
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, frame: &mut Bitmap) {
         if let Some(tags) = &mut self.tags {
             tags.render(cx, frame);
+            return;
+        }
+        if let Some((_, c)) = &mut self.confirm_remove {
+            c.render(cx, frame);
             return;
         }
         header(
@@ -195,7 +205,6 @@ impl Page<Kindlia> for BookPage {
                         ("评论", 15, true),
                     ],
                     16,
-                    Some(13),
                 );
             } else {
                 let area = Rect::new(0, top as i32, w, cx.height.saturating_sub(top));
@@ -280,8 +289,17 @@ impl Page<Kindlia> for BookPage {
                 pager(cx, frame, self.page, pages, 0);
             }
         }
+        tips::show(
+            cx,
+            frame,
+            &tips::BOOKMARKS,
+            self.catalog && self.from_reader && self.tags.is_none() && self.confirm_remove.is_none(),
+        );
     }
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, event: &InputEvent) -> Transition<Kindlia> {
+        if self.catalog && self.from_reader && tips::input(cx, event, &tips::BOOKMARKS) {
+            return Transition::None;
+        }
         // 按下反馈由运行时负责；等完整手势再修改页面，避免按下/抬起各整页刷新一次。
         if matches!(event, InputEvent::Gesture(g) if g.kind == kn_platform::GestureKind::Down) {
             return Transition::None;
@@ -302,6 +320,25 @@ impl Page<Kindlia> for BookPage {
                     }
                 }
                 choice::Event::Cancel => self.tags = None,
+                _ => {}
+            }
+            cx.request_redraw(RefreshHint::Clean);
+            return Transition::None;
+        }
+        if let Some((path, confirm)) = &mut self.confirm_remove {
+            match confirm.input(cx, event) {
+                choice::Event::Selected(1) => {
+                    let path = path.clone();
+                    self.confirm_remove = None;
+                    if cx.app.repo.offline {
+                        self.notice = "离线模式不可修改云端数据".into();
+                    } else {
+                        self.loading = true;
+                        let api = cx.app.repo.api.account_snapshot();
+                        cx.spawn(move || Mutation(api.mutate("DELETE", &path, &serde_json::Value::Null)));
+                    }
+                }
+                choice::Event::Selected(_) | choice::Event::Cancel => self.confirm_remove = None,
                 _ => {}
             }
             cx.request_redraw(RefreshHint::Clean);
@@ -380,19 +417,39 @@ impl Page<Kindlia> for BookPage {
                 }
             }
             Some(14) => {
-                self.refresh_favorite = true;
+                if !cx.app.repo.api.signed_in() {
+                    return Transition::Push(Box::new(login::LoginPage::new()));
+                }
                 if let Some(folder) = self.novel.as_ref().and_then(|n| n.favored.as_deref()) {
-                    let path = format!(
+                    let mut path = format!(
                         "user/favored-web/{}/{}/{}",
                         crate::api::encode(folder),
                         crate::api::encode(&self.key.provider_id),
                         crate::api::encode(&self.key.novel_id)
                     );
-                    return Transition::Push(Box::new(manage::ManagePage::remove(path)));
+                    if self.key.provider_id == "epub" {
+                        if let Some(v) = cx
+                            .app
+                            .repo
+                            .store
+                            .read_cache::<serde_json::Value>("epub-source", &self.key)
+                        {
+                            let wenku_id = v["novel"].as_str().unwrap_or("");
+                            path = format!(
+                                "user/favored-wenku/{}/{}",
+                                crate::api::encode(folder),
+                                crate::api::encode(wenku_id)
+                            );
+                        }
+                    }
+                    self.confirm_remove = Some((
+                        path,
+                        choice::Choice::new("从云收藏移出？", ["取消", "移出"], Some(0)),
+                    ));
+                    cx.request_redraw(RefreshHint::Ui);
+                    return Transition::None;
                 }
-                if !cx.app.repo.api.signed_in() {
-                    return Transition::Push(Box::new(login::LoginPage::new()));
-                }
+                self.refresh_favorite = true;
                 let mut key = self.key.clone();
                 if key.provider_id == "epub" {
                     if let Some(v) = cx
@@ -479,7 +536,7 @@ impl Page<Kindlia> for BookPage {
                         let key = self.key.clone();
                         let r = detail::cover_rect(cx);
                         crate::covers::spawn(cx, key, (r.w, r.h), move |_, image| {
-                            CoverResult(image)
+                            CoverResult(image.or_else(|_| crate::covers::fallback((r.w, r.h))))
                         });
                         self.novel = Some(loaded.value);
                         self.notice = loaded.notice.unwrap_or_default();
@@ -499,16 +556,34 @@ impl Page<Kindlia> for BookPage {
             }
             Err(msg) => msg,
         };
-        if let Ok(result) = msg.downcast::<FavoriteResult>() {
+        let msg = match msg.downcast::<FavoriteResult>() {
+            Ok(result) => {
+                match result.0 {
+                    Ok(()) => {
+                        self.favorite = !self.favorite;
+                        self.notice.clear();
+                        cx.toast("书架已保存");
+                    }
+                    Err(e) => self.notice = e,
+                }
+                cx.request_redraw(RefreshHint::Ui);
+                return;
+            }
+            Err(msg) => msg,
+        };
+        if let Ok(result) = msg.downcast::<Mutation>() {
+            self.loading = false;
             match result.0 {
                 Ok(()) => {
-                    self.favorite = !self.favorite;
-                    self.notice.clear();
-                    cx.toast("书架已保存");
+                    self.refresh_favorite = false;
+                    cx.toast("已移出收藏");
+                    self.load(cx, true);
                 }
-                Err(e) => self.notice = e,
+                Err(e) => {
+                    self.notice = e;
+                    cx.request_redraw(RefreshHint::Ui);
+                }
             }
-            cx.request_redraw(RefreshHint::Ui);
         }
     }
 }

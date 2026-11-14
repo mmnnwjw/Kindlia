@@ -13,7 +13,7 @@ pub fn fallback(size: (u32, u32)) -> Result<Bitmap, String> {
         kn_render::image::decode_gray(include_bytes!("../../../../assets/no_cover.webp"), None)
             .map_err(|e| e.to_string())
     }) {
-        Ok(image) => Ok(image.fit_within(size.0, size.1)),
+        Ok(image) => Ok(image.fit_within(size.0, size.1).dithered()),
         Err(e) => Err(e.clone()),
     }
 }
@@ -143,7 +143,9 @@ pub fn spawn<M: std::any::Any + Send>(
             move |meta: Metadata, spawner: kn_ui::Spawner<crate::Kindlia>, repo: Repository| {
                 let url = meta.cover.clone();
                 if url.is_empty() || url == DEFAULT_URL {
-                    finish(meta, fallback(size));
+                    spawner.spawn_on(kn_ui::Lane::Local, true, move || {
+                        finish(meta, fallback(size))
+                    });
                     return;
                 }
                 crate::images::spawn_on(spawner, repo, url, move |bytes| {
@@ -155,7 +157,15 @@ pub fn spawn<M: std::any::Any + Send>(
                     finish(meta, result)
                 });
             };
-        if meta.cover.is_empty() && !repo.offline {
+        let can_fetch = !repo.offline
+            && meta.cover.is_empty()
+            && (matches!(key.provider_id.as_str(), "wenku" | "epub")
+                || repo
+                    .store
+                    .read_cache::<crate::model::Novel>("novels", &key)
+                    .and_then(|n| n.wenku_id)
+                    .is_some());
+        if can_fetch {
             let local = spawner.clone();
             spawner.spawn_on(kn_ui::Lane::Media, true, move || {
                 let meta = metadata(&repo, &key, true);
