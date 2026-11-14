@@ -8,6 +8,8 @@ LOG_DIR="$KINDLIA_HOME/logs"
 PAUSE_LIST=/tmp/kindlia_paused_pids
 LOCK_DIR=/tmp/kindlia.lock
 BIN_RUN=/tmp/kindlia-bin
+RESTART_MARKER=/tmp/kindlia_restart
+export KINDLIA_RESTART_SUPPORTED=1
 GRAYSCALE_MARKER=/tmp/kindlia_grayscale
 FB_BACKUP=/tmp/kindlia-fb.dump
 SLEEP_COVER=0
@@ -40,6 +42,7 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     mkdir "$LOCK_DIR" || exit 1
 fi
 echo $$ > "$LOCK_DIR/pid"
+rm -f "$RESTART_MARKER"
 resume_fb_users() {
     [ -f "$PAUSE_LIST" ] || return 0
     while read -r pid; do
@@ -152,4 +155,17 @@ log "starting Kindlia"
 RET=$?
 restore_display
 log "exited with $RET"
+case "$RET" in
+    0|130|143) ;;
+    *)
+        [ -f "$LOG_DIR/last_crash.txt" ] || echo "Kindlia exited with code $RET" > "$LOG_DIR/last_crash.txt"
+        ;;
+esac
+if [ "$RET" = 0 ] && [ -f "$RESTART_MARKER" ]; then
+    rm -f "$RESTART_MARKER"
+    log "restarting after update"
+    trap - EXIT INT TERM
+    cleanup
+    exec /bin/sh "$SCRIPT_DIR/kindlia.sh"
+fi
 exit "$RET"

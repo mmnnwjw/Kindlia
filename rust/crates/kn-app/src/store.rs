@@ -51,6 +51,21 @@ pub fn atomic_write(path: &Path, bytes: &[u8], durable: bool) -> io::Result<()> 
     result
 }
 
+pub fn touch(path: &Path) {
+    if let Ok(meta) = fs::metadata(path) {
+        let now = std::time::SystemTime::now();
+        if meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age.as_secs() >= 3600)
+        {
+            if let Ok(file) = fs::OpenOptions::new().write(true).open(path) {
+                let _ = file.set_modified(now);
+            }
+        }
+    }
+}
 pub fn root_dir() -> PathBuf {
     std::env::var_os("KINDLIA_HOME")
         .map(PathBuf::from)
@@ -208,6 +223,12 @@ pub struct Progress {
     pub path: String,
     pub offset: usize,
     pub updated_at: u64,
+    #[serde(default)]
+    pub chapter_title: String,
+    #[serde(default)]
+    pub page: usize,
+    #[serde(default)]
+    pub pages: usize,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShelfEntry {
@@ -224,6 +245,7 @@ pub struct Store {
     gate: Arc<Mutex<()>>,
     pending_progress: Arc<Mutex<std::collections::HashMap<NovelKey, PendingProgress>>>,
     cached_shelf: Arc<Mutex<Option<Vec<ShelfEntry>>>>,
+    pending_chapters: Arc<Mutex<std::collections::HashMap<(NovelKey, String), PendingProgress>>>,
 }
 #[derive(Clone)]
 pub(crate) struct PendingProgress {
@@ -240,6 +262,7 @@ impl Store {
             gate: Arc::new(Mutex::new(())),
             pending_progress: Arc::new(Mutex::new(std::collections::HashMap::new())),
             cached_shelf: Arc::new(Mutex::new(None)),
+            pending_chapters: Arc::new(Mutex::new(Default::default())),
         }
     }
     pub fn cache_path(&self, kind: &str, key: &impl Serialize) -> PathBuf {
@@ -282,7 +305,10 @@ impl Store {
             })
             .ok()?;
         match serde_json::from_slice(&bytes) {
-            Ok(value) => Some(value),
+            Ok(value) => {
+                touch(&path);
+                Some(value)
+            }
             Err(_) => {
                 let _ = fs::remove_file(path);
                 None
@@ -324,48 +350,137 @@ impl Store {
         }
     }
     pub fn shelf(&self) -> Result<Vec<ShelfEntry>, String> {
-        let cached = self.cached_shelf.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let mut entries = if let Some(entries) = cached { entries } else {
+        let cached = self
+            .cached_shelf
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let mut entries = if let Some(entries) = cached {
+            entries
+        } else {
             let entries = self.disk_shelf()?;
-            self.cached_shelf.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert(entries).clone()
+            self.cached_shelf
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_or_insert(entries)
+                .clone()
         };
-        let pending = self.pending_progress.lock().unwrap_or_else(|e| e.into_inner());
+        let pending = self
+            .pending_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for (key, value) in pending.iter() {
             if let Some(entry) = entries.iter_mut().find(|e| e.key == *key) {
                 entry.title = value.title.clone();
                 entry.progress = Some(value.progress.clone());
             } else {
-                entries.push(ShelfEntry { key: key.clone(), title: value.title.clone(), favorite: false, progress: Some(value.progress.clone()) });
+                entries.push(ShelfEntry {
+                    key: key.clone(),
+                    title: value.title.clone(),
+                    favorite: false,
+                    progress: Some(value.progress.clone()),
+                });
             }
         }
         entries.sort_by_key(|e| std::cmp::Reverse(e.progress.as_ref().map_or(0, |p| p.updated_at)));
         Ok(entries)
     }
-    pub(crate) fn stage_progress(&self, key: NovelKey, title: String, progress: Progress, user: String) {
+    pub(crate) fn stage_progress(
+        &self,
+        key: NovelKey,
+        title: String,
+        progress: Progress,
+        user: String,
+    ) {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-        self.pending_progress.lock().unwrap_or_else(|e| e.into_inner()).insert(key, PendingProgress {
-            sequence: SEQUENCE.fetch_add(1, Ordering::Relaxed), title, user, progress,
-        });
+        let value = PendingProgress {
+            sequence: SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            title,
+            user,
+            progress,
+        };
+        // Keep every chapter snapshot, even when rapid jumps coalesce the book's last-read job.
+        self.pending_chapters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                (key.clone(), value.progress.chapter_id.clone()),
+                value.clone(),
+            );
+        self.pending_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, value);
     }
     pub(crate) fn progress_is_current(&self, key: &NovelKey, sequence: u64) -> bool {
-        self.pending_progress.lock().unwrap_or_else(|e| e.into_inner()).get(key).is_some_and(|p| p.sequence == sequence)
+        self.pending_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .is_some_and(|p| p.sequence == sequence)
     }
     pub(crate) fn finish_progress(&self, key: &NovelKey, sequence: u64) {
-        let mut pending = self.pending_progress.lock().unwrap_or_else(|e| e.into_inner());
-        if pending.get(key).is_some_and(|p| p.sequence == sequence) { pending.remove(key); }
+        let mut pending = self
+            .pending_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if pending.get(key).is_some_and(|p| p.sequence == sequence) {
+            pending.remove(key);
+        }
+        self.pending_chapters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(k, _), p| k != key || p.sequence > sequence);
     }
-    pub(crate) fn persist_progress(&self, key: &NovelKey) -> Result<Option<PendingProgress>, String> {
+    pub(crate) fn persist_progress(
+        &self,
+        key: &NovelKey,
+    ) -> Result<Option<PendingProgress>, String> {
         let _lock = self.gate.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(value) = self.pending_progress.lock().unwrap_or_else(|e| e.into_inner()).get(key).cloned() else { return Ok(None); };
+        let Some(value) = self
+            .pending_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let chapters: Vec<_> = self
+            .pending_chapters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|((k, _), p)| k == key && p.sequence <= value.sequence)
+            .map(|(_, p)| p.progress.clone())
+            .collect();
+        for p in chapters {
+            atomic_write(
+                &self.data_path(&format!("progress-{}.json", digest(&(key, &p.chapter_id)))),
+                &serde_json::to_vec(&p).map_err(|e| e.to_string())?,
+                true,
+            )
+            .map_err(|e| e.to_string())?;
+        }
         let mut entries = self.disk_shelf()?;
         if let Some(entry) = entries.iter_mut().find(|e| e.key == *key) {
             entry.title = value.title.clone();
             entry.progress = Some(value.progress.clone());
         } else {
-            entries.push(ShelfEntry { key: key.clone(), title: value.title.clone(), favorite: false, progress: Some(value.progress.clone()) });
+            entries.push(ShelfEntry {
+                key: key.clone(),
+                title: value.title.clone(),
+                favorite: false,
+                progress: Some(value.progress.clone()),
+            });
         }
         entries.sort_by_key(|e| std::cmp::Reverse(e.progress.as_ref().map_or(0, |p| p.updated_at)));
-        atomic_write(&self.shelf_path(), &serde_json::to_vec_pretty(&entries).map_err(|e| e.to_string())?, true).map_err(|e| e.to_string())?;
+        atomic_write(
+            &self.shelf_path(),
+            &serde_json::to_vec_pretty(&entries).map_err(|e| e.to_string())?,
+            true,
+        )
+        .map_err(|e| e.to_string())?;
         *self.cached_shelf.lock().unwrap_or_else(|e| e.into_inner()) = Some(entries);
         Ok(Some(value))
     }
@@ -404,7 +519,10 @@ impl Store {
     pub fn clear_history(&self) -> Result<(), String> {
         let _lock = self.gate.lock().unwrap_or_else(|e| e.into_inner());
         let mut entries = self.disk_shelf()?;
-        self.pending_progress.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.pending_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         for e in &mut entries {
             e.progress = None;
         }
@@ -417,6 +535,58 @@ impl Store {
         .map_err(|e| e.to_string())?;
         *self.cached_shelf.lock().unwrap_or_else(|e| e.into_inner()) = Some(entries);
         Ok(())
+    }
+    pub fn chapter_progress(&self, key: &NovelKey, chapter: &str) -> Option<Progress> {
+        if let Some(p) = self
+            .pending_chapters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(key.clone(), chapter.to_owned()))
+        {
+            return Some(p.progress.clone());
+        }
+        std::fs::read(self.data_path(&format!("progress-{}.json", digest(&(key, chapter)))))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .or_else(|| self.progress(key).filter(|p| p.chapter_id == chapter))
+    }
+    pub fn bookmark_info(
+        &self,
+        key: &NovelKey,
+        entry: &(String, String, usize),
+    ) -> Option<(String, String)> {
+        std::fs::read(self.data_path(&format!("bookmark-info-{}.json", digest(&(key, entry)))))
+            .ok()
+            .and_then(|b| {
+                serde_json::from_slice::<(String, String)>(&b)
+                    .ok()
+                    .or_else(|| {
+                        let v: serde_json::Value = serde_json::from_slice(&b).ok()?;
+                        let mut excerpt = v["excerpt"].as_str()?.to_owned();
+                        if let Some(at) = v["created_at"].as_i64() {
+                            excerpt =
+                                format!("{} · {}", crate::formatting::date(Some(at)), excerpt);
+                        }
+                        Some((v["title"].as_str()?.to_owned(), excerpt))
+                    })
+            })
+    }
+    pub fn save_bookmark_info(
+        &self,
+        key: &NovelKey,
+        entry: &(String, String, usize),
+        title: &str,
+        excerpt: &str,
+    ) {
+        if let Ok(b) = serde_json::to_vec(&serde_json::json!({
+            "title": title, "excerpt": excerpt, "created_at": crate::stats::unix_now()
+        })) {
+            let _ = atomic_write(
+                &self.data_path(&format!("bookmark-info-{}.json", digest(&(key, entry)))),
+                &b,
+                true,
+            );
+        }
     }
     pub fn progress(&self, key: &NovelKey) -> Option<Progress> {
         self.shelf()

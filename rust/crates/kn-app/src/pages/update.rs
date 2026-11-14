@@ -118,7 +118,15 @@ impl Page<Kindlia> for UpdatePage {
             .is_some_and(|r| crate::update::newer(&r.version));
         use kn_ui::widgets::ButtonStyle as B;
         let buttons: Vec<(&str, u32, B)> = if self.installed {
-            vec![("完成，退出应用", 2, B::Primary)]
+            vec![(
+                if std::env::var_os("KINDLIA_RESTART_SUPPORTED").is_some() {
+                    "立即重启"
+                } else {
+                    "完成，退出应用"
+                },
+                2,
+                B::Primary,
+            )]
         } else if self.installing {
             vec![("正在下载并安装…", 0, B::Disabled)]
         } else if self.busy {
@@ -288,7 +296,16 @@ impl Page<Kindlia> for UpdatePage {
         }
         match hit(cx, e) {
             Some(1) if !self.installing => return Transition::Back,
-            Some(2) if self.installed => return Transition::Exit,
+            Some(2) if self.installed => {
+                if std::env::var_os("KINDLIA_RESTART_SUPPORTED").is_some() {
+                    if let Err(e) = std::fs::write("/tmp/kindlia_restart", b"1") {
+                        self.notice = format!("无法请求重启：{e}");
+                        cx.request_redraw(RefreshHint::Ui);
+                        return Transition::None;
+                    }
+                }
+                return Transition::Exit;
+            }
             Some(2)
                 if !self.busy
                     && self
@@ -359,7 +376,12 @@ impl Page<Kindlia> for UpdatePage {
             match r.0 {
                 Ok(_) => {
                     self.installed = true;
-                    self.notice = "安装完成；退出后从 KUAL 重新打开 Kindlia".into();
+                    self.notice = if std::env::var_os("KINDLIA_RESTART_SUPPORTED").is_some() {
+                        "安装完成；立即重启以使用新版本"
+                    } else {
+                        "安装完成；退出后从 KUAL 重新打开 Kindlia"
+                    }
+                    .into();
                 }
                 Err(e) => self.notice = format!("更新失败：{e}"),
             };

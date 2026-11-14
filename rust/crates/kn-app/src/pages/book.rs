@@ -25,6 +25,9 @@ pub struct BookPage {
     pending_back: bool,
     cover: Option<Bitmap>,
     tags: Option<choice::Choice>,
+    refresh_favorite: bool,
+    current_chapter: Option<String>,
+    located: bool,
 }
 impl BookPage {
     pub fn new(key: NovelKey) -> Self {
@@ -41,6 +44,9 @@ impl BookPage {
             pending_back: false,
             cover: None,
             tags: None,
+            refresh_favorite: false,
+            current_chapter: None,
+            located: false,
         }
     }
     pub fn catalog(key: NovelKey, novel: Option<Novel>) -> Self {
@@ -56,7 +62,13 @@ impl BookPage {
         self.notice = "加载中…".into();
         let repo = cx.app.repo.clone();
         let key = self.key.clone();
-        crate::repository::read_on_workers(cx, repo, refresh, move |r| r.novel(&key, refresh), NovelResult);
+        crate::repository::read_on_workers(
+            cx,
+            repo,
+            refresh,
+            move |r| r.novel(&key, refresh),
+            NovelResult,
+        );
         cx.request_redraw(RefreshHint::Ui);
     }
     fn open(&self, id: String, cx: &mut Cx<Kindlia>) -> Transition<Kindlia> {
@@ -73,6 +85,7 @@ impl Page<Kindlia> for BookPage {
         PageId(20)
     }
     fn enter(&mut self, cx: &mut Cx<Kindlia>, _returning: bool) {
+        self.current_chapter = cx.app.repo.store.progress(&self.key).map(|p| p.chapter_id);
         if self.from_reader && cx.app.reader_jump.is_some() {
             self.pending_back = true;
             return;
@@ -85,15 +98,22 @@ impl Page<Kindlia> for BookPage {
             .unwrap_or_default()
             .iter()
             .any(|e| e.key == self.key && e.favorite);
-        if self.novel.is_none() {
-            self.load(cx, false);
+        if self.novel.is_none() || self.refresh_favorite {
+            let refresh = self.refresh_favorite;
+            self.refresh_favorite = false;
+            self.load(cx, refresh);
         }
     }
     fn wants_backdrop(&self) -> kn_ui::Backdrop {
-        self.tags.as_ref().map(|p| p.wants_backdrop()).unwrap_or(kn_ui::Backdrop::None)
+        self.tags
+            .as_ref()
+            .map(|p| p.wants_backdrop())
+            .unwrap_or(kn_ui::Backdrop::None)
     }
     fn set_backdrop(&mut self, bg: Option<Bitmap>) {
-        if let Some(p) = self.tags.as_mut() { p.set_backdrop(bg); }
+        if let Some(p) = self.tags.as_mut() {
+            p.set_backdrop(bg);
+        }
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, frame: &mut Bitmap) {
         if let Some(tags) = &mut self.tags {
@@ -128,7 +148,13 @@ impl Page<Kindlia> for BookPage {
                         novel.novel_type.as_deref().unwrap_or("Web小说"),
                         total
                     ),
-                    format!("{} · {}", crate::formatting::characters(novel.total_characters), crate::formatting::updated(novel.toc.iter().filter_map(|c| c.create_at).max())),
+                    format!(
+                        "{} · {}",
+                        crate::formatting::characters(novel.total_characters),
+                        crate::formatting::updated(
+                            novel.toc.iter().filter_map(|c| c.create_at).max()
+                        )
+                    ),
                     format!("标签：{}", novel.keywords.join("、")),
                 ];
                 let resume = cx.app.repo.store.progress(&self.key).is_some();
@@ -156,7 +182,9 @@ impl Page<Kindlia> for BookPage {
                         ),
                         ("目录", 11, total > 0),
                         (
-                            if self.favorite && !cloud {
+                            if cloud && novel.favored.is_some() {
+                                "移出收藏"
+                            } else if self.favorite && !cloud {
                                 "移出书架"
                             } else {
                                 "加入书架"
@@ -215,6 +243,14 @@ impl Page<Kindlia> for BookPage {
                 self.rows =
                     (cx.height.saturating_sub(start + m.pager_h()) / m.row_h()).max(1) as usize;
                 let pages = novel.toc.len().div_ceil(self.rows).max(1);
+                if !self.located {
+                    self.located = true;
+                    if let Some(i) = novel.toc.iter().position(|c| {
+                        c.chapter_id.is_some() && c.chapter_id == self.current_chapter
+                    }) {
+                        self.page = i / self.rows;
+                    }
+                }
                 self.page = self.page.min(pages - 1);
                 for (i, item) in novel
                     .toc
@@ -233,7 +269,11 @@ impl Page<Kindlia> for BookPage {
                         } else {
                             "分卷".into()
                         },
-                        "",
+                        if item.chapter_id.is_some() && item.chapter_id == self.current_chapter {
+                            "当前"
+                        } else {
+                            ""
+                        },
                         item.chapter_id.as_ref().map(|_| 200 + i as u32),
                     );
                 }
@@ -267,7 +307,11 @@ impl Page<Kindlia> for BookPage {
             cx.request_redraw(RefreshHint::Clean);
             return Transition::None;
         }
-        match hit(cx, event) {
+        match if self.catalog {
+            page_hit(cx, event)
+        } else {
+            hit(cx, event)
+        } {
             Some(1) => {
                 if self.catalog && !self.from_reader {
                     self.catalog = false;
@@ -294,6 +338,7 @@ impl Page<Kindlia> for BookPage {
             }
             Some(11) => {
                 self.catalog = !self.catalog;
+                self.located = false;
                 self.page = 0;
                 cx.request_redraw(RefreshHint::Ui);
             }
@@ -315,8 +360,12 @@ impl Page<Kindlia> for BookPage {
             }
             Some(13) => self.load(cx, true),
             Some(19) => {
-                if let Some(a)=self.novel.as_ref().and_then(|n|n.authors.first()) {
-                    let q=if a.name.contains([' ', '　']) { format!("\"{}\"",a.name) } else { a.name.clone() };
+                if let Some(a) = self.novel.as_ref().and_then(|n| n.authors.first()) {
+                    let q = if a.name.contains([' ', '　']) {
+                        format!("\"{}\"", a.name)
+                    } else {
+                        a.name.clone()
+                    };
                     return Transition::Push(Box::new(library::LibraryPage::search(q)));
                 }
             }
@@ -331,6 +380,16 @@ impl Page<Kindlia> for BookPage {
                 }
             }
             Some(14) => {
+                self.refresh_favorite = true;
+                if let Some(folder) = self.novel.as_ref().and_then(|n| n.favored.as_deref()) {
+                    let path = format!(
+                        "user/favored-web/{}/{}/{}",
+                        crate::api::encode(folder),
+                        crate::api::encode(&self.key.provider_id),
+                        crate::api::encode(&self.key.novel_id)
+                    );
+                    return Transition::Push(Box::new(manage::ManagePage::remove(path)));
+                }
                 if !cx.app.repo.api.signed_in() {
                     return Transition::Push(Box::new(login::LoginPage::new()));
                 }
@@ -378,7 +437,13 @@ impl Page<Kindlia> for BookPage {
                 self.page = self.page.saturating_sub(1);
                 cx.request_redraw(RefreshHint::Ui);
             }
-            Some(3) => {
+            Some(3)
+                if self.page + 1
+                    < self
+                        .novel
+                        .as_ref()
+                        .map_or(0, |n| n.toc.len().div_ceil(self.rows)) =>
+            {
                 self.page += 1;
                 cx.request_redraw(RefreshHint::Ui);
             }
@@ -413,7 +478,9 @@ impl Page<Kindlia> for BookPage {
                     Ok(loaded) => {
                         let key = self.key.clone();
                         let r = detail::cover_rect(cx);
-                        crate::covers::spawn(cx,key,(r.w,r.h),move |_,image|CoverResult(image));
+                        crate::covers::spawn(cx, key, (r.w, r.h), move |_, image| {
+                            CoverResult(image)
+                        });
                         self.novel = Some(loaded.value);
                         self.notice = loaded.notice.unwrap_or_default();
                     }
@@ -436,7 +503,8 @@ impl Page<Kindlia> for BookPage {
             match result.0 {
                 Ok(()) => {
                     self.favorite = !self.favorite;
-                    self.notice = "书架已保存".into();
+                    self.notice.clear();
+                    cx.toast("书架已保存");
                 }
                 Err(e) => self.notice = e,
             }

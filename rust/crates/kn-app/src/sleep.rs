@@ -1,6 +1,13 @@
 use crate::{model::NovelKey, Kindlia};
 use kn_render::Bitmap;
 use kn_ui::{Cx, Page, PageId};
+pub fn restore(cx: &mut Cx<Kindlia>) {
+    if let Ok(bytes) = std::fs::read(cx.app.repo.store.data_path("sleep_cover.json")) {
+        if let Ok(key) = serde_json::from_slice(&bytes) {
+            prepare(cx, key);
+        }
+    }
+}
 pub fn prepare(cx: &mut Cx<Kindlia>, key: NovelKey) {
     if !cx.app.config.sleep_cover || cx.app.sleep_request.as_ref() == Some(&key) {
         return;
@@ -9,7 +16,14 @@ pub fn prepare(cx: &mut Cx<Kindlia>, key: NovelKey) {
     let repo = cx.app.repo.clone();
     let size = (cx.width * 9 / 10, cx.height * 9 / 10);
     cx.spawn_app(move || {
-        let image = crate::covers::for_book(&repo, &key, size).ok();
+        let _ = crate::store::atomic_write(
+            &repo.store.data_path("sleep_cover.json"),
+            &serde_json::to_vec(&key).unwrap_or_default(),
+            true,
+        );
+        let image = crate::covers::for_book(&repo, &key, size)
+            .ok()
+            .map(|b| b.dithered());
         Box::new(move |app: &mut Kindlia| {
             if app.sleep_request.as_ref() == Some(&key) {
                 app.sleep_image = image;
@@ -17,7 +31,7 @@ pub fn prepare(cx: &mut Cx<Kindlia>, key: NovelKey) {
         })
     });
 }
-pub struct SleepPage(pub Bitmap);
+pub struct SleepPage(pub Option<Bitmap>);
 impl Page<Kindlia> for SleepPage {
     fn on_input(
         &mut self,
@@ -30,12 +44,78 @@ impl Page<Kindlia> for SleepPage {
         PageId(59)
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, frame: &mut Bitmap) {
-        frame.fill_rect(frame.bounds(), 255);
-        frame.blit(
-            &self.0,
-            self.0.bounds(),
-            (cx.width as i32 - self.0.width() as i32) / 2,
-            (cx.height as i32 - self.0.height() as i32) / 2,
+        frame.fill_rect(frame.bounds(), cx.theme.background);
+        let m = cx.app.metrics;
+        let footer = kn_render::Rect::new(
+            m.margin as i32,
+            (cx.height - 2 * m.touch - m.margin) as i32,
+            cx.width - 2 * m.margin,
+            2 * m.touch,
+        );
+        if let Some(image) = &self.0 {
+            let image = image.fit_within(cx.width - 2 * m.margin, footer.y.max(1) as u32);
+            frame.blit(
+                &image,
+                image.bounds(),
+                (cx.width as i32 - image.width() as i32) / 2,
+                (footer.y - image.height() as i32) / 2,
+            );
+        } else {
+            kn_ui::widgets::card(
+                frame,
+                &cx.theme,
+                &m,
+                kn_render::Rect::new(
+                    m.margin as i32,
+                    (cx.height / 4) as i32,
+                    cx.width - 2 * m.margin,
+                    cx.height / 3,
+                ),
+            );
+        }
+        let last = cx
+            .app
+            .repo
+            .store
+            .shelf()
+            .ok()
+            .and_then(|v| v.into_iter().find(|b| b.progress.is_some()));
+        let title = last.as_ref().map(|b| b.title.as_str()).unwrap_or("Kindlia");
+        let status = last
+            .as_ref()
+            .and_then(|b| b.progress.as_ref())
+            .map(|p| {
+                let page = if p.pages > 0 {
+                    format!("{}/{}", p.page, p.pages)
+                } else {
+                    p.page.to_string()
+                };
+                if p.chapter_title.is_empty() {
+                    format!("{page} · 休眠中")
+                } else {
+                    format!("{} · {page} · 休眠中", p.chapter_title)
+                }
+            })
+            .unwrap_or_else(|| "休眠中".into());
+        let mut ink = kn_ui::widgets::Ink {
+            fonts: cx.fonts,
+            glyphs: cx.glyphs,
+            chain: &cx.app.ui_fonts,
+        };
+        let title = ink.fit(&title, m.title, footer.w as f32);
+        ink.text_centered(
+            frame,
+            kn_render::Rect::new(footer.x, footer.y, footer.w, m.touch),
+            &title,
+            m.title,
+            cx.theme.foreground,
+        );
+        ink.text_centered(
+            frame,
+            kn_render::Rect::new(footer.x, footer.y + m.touch as i32, footer.w, m.touch),
+            &ink.fit(&status, m.small, footer.w as f32),
+            m.small,
+            cx.theme.muted,
         );
     }
 }
@@ -63,6 +143,15 @@ pub fn prune(root: &std::path::Path, limit_mb: u32) {
                                 stack.push(e.path());
                             } else if t.is_file() {
                                 if let Ok(m) = e.metadata() {
+                                    if e.file_name().to_string_lossy().contains(".tmp-kindlia-")
+                                        && m.modified()
+                                            .ok()
+                                            .and_then(|t| t.elapsed().ok())
+                                            .is_some_and(|age| age.as_secs() > 86400)
+                                    {
+                                        let _ = std::fs::remove_file(e.path());
+                                        continue;
+                                    }
                                     total += m.len();
                                     files.push((
                                         m.modified().unwrap_or(std::time::UNIX_EPOCH),

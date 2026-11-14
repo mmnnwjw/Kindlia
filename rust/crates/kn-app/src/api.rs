@@ -76,12 +76,20 @@ pub struct ApiClient {
     strict_tls: bool,
     limit: Arc<RateLimit>,
     image_limit: Arc<RateLimit>,
+    pub(crate) refresh_lock: Arc<Mutex<()>>,
+    gets: Arc<crate::net_cache::Cache>,
+    mutation_epoch: Arc<std::sync::atomic::AtomicU64>,
+    health: Arc<Mutex<std::collections::HashMap<String, Arc<kn_net::health::ServerHealth>>>>,
 }
 impl ApiClient {
     pub fn new(base: &str, timeout_secs: u64, strict_tls: bool) -> Result<Self, String> {
         Ok(Self {
             base: normalize_base(base)?,
             gateway: None,
+            gets: Arc::new(Default::default()),
+            mutation_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            health: Arc::new(Mutex::new(Default::default())),
+            refresh_lock: Arc::new(Mutex::new(())),
             auth_base: "https://auth.novelia.cc".into(),
             forum_base: "https://forum.novelia.cc".into(),
             session: Arc::new(Mutex::new(Default::default())),
@@ -93,10 +101,16 @@ impl ApiClient {
         })
     }
     /// Capture the submitting account for background writes; never overwrite a later login's session file.
-    pub fn account_snapshot(&self)->Self {
-        let mut api=self.clone();
-        let session=self.session.lock().unwrap_or_else(|e|e.into_inner()).clone();
-        api.session=Arc::new(Mutex::new(session)); api.session_file=None; api
+    pub fn account_snapshot(&self) -> Self {
+        let mut api = self.clone();
+        let session = self
+            .session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        api.session = Arc::new(Mutex::new(session));
+        api.session_file = None;
+        api
     }
     pub fn configure_gateway(&mut self, enabled: bool, url: &str, key: &str) -> Result<(), String> {
         self.gateway = if enabled {
@@ -156,6 +170,10 @@ impl ApiClient {
         token: Option<&str>,
         cookie: Option<&str>,
     ) -> Result<http::HttpResponse, String> {
+        let health = self.server_health(url);
+        if health.is_down() {
+            return Err("服务器暂不可达，已暂缓重复连接；稍后重试".into());
+        }
         self.limit.wait();
         let url = self.transport_url(url, false)?;
         let (server, path) = http::split_url(&url).map_err(|e| e.to_string())?;
@@ -171,7 +189,7 @@ impl ApiClient {
         if let Some(cookie) = cookie.filter(|s| !s.is_empty()) {
             headers.push(("Cookie", cookie.into()));
         }
-        http::request(
+        let result = http::request(
             &server,
             &path,
             method,
@@ -179,10 +197,59 @@ impl ApiClient {
             body,
             self.timeout,
             stream::tls_config(self.strict_tls),
-        )
-        .map_err(|e| e.to_string())
+        );
+        match &result {
+            Ok(r) if matches!(r.status, 502..=504) => {
+                health.record::<()>(&Err(NetError::api("服务暂不可用", r.status as i32)))
+            }
+            _ => health.record(&result),
+        };
+        result.map_err(|e| e.to_string())
+    }
+    fn server_health(&self, url: &str) -> Arc<kn_net::health::ServerHealth> {
+        let key = url::Url::parse(url)
+            .map(|u| u.origin().ascii_serialization())
+            .unwrap_or_else(|_| url.into());
+        self.health
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(key)
+            .or_default()
+            .clone()
     }
     pub fn request(
+        &self,
+        method: &str,
+        route: &str,
+        body: &[u8],
+        content: &str,
+    ) -> Result<Vec<u8>, String> {
+        use std::sync::atomic::Ordering;
+        if method == "GET" {
+            let session = self
+                .session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let key = crate::model::digest(&(
+                &self.base,
+                &self.auth_base,
+                route,
+                &session.username,
+                &session.token,
+                session.revision,
+                self.mutation_epoch.load(Ordering::SeqCst),
+            ));
+            self.gets
+                .get(key, || self.request_uncached(method, route, body, content))
+        } else {
+            self.mutation_epoch.fetch_add(1, Ordering::SeqCst);
+            let result = self.request_uncached(method, route, body, content);
+            self.mutation_epoch.fetch_add(1, Ordering::SeqCst);
+            result
+        }
+    }
+    fn request_uncached(
         &self,
         method: &str,
         route: &str,
@@ -202,7 +269,7 @@ impl ApiClient {
             .clone();
         let mut r = self.send(&url, method, body, content, Some(&token), None)?;
         if r.status == 401 && !token.is_empty() {
-            self.refresh()?;
+            self.refresh_after(Some(&token))?;
             let token = self
                 .session
                 .lock()
@@ -292,14 +359,24 @@ impl ApiClient {
     pub fn image(&self, url: &str) -> Result<Vec<u8>, String> {
         self.image_limit.wait();
         let url = self.transport_url(url, true)?;
-        http::download_resumable_headers(
-            &url,
-            12 * 1024 * 1024,
-            self.timeout,
-            stream::tls_config(self.strict_tls),
-            &self.gateway_headers(),
-        )
-        .map_err(|e| e.to_string())
+        let key = format!("image:{}", crate::model::digest(&url));
+        self.gets.get(key, || {
+            let health = self.server_health(&url);
+            if health.is_down() {
+                return Err("图片服务器暂不可达，稍后重试".into());
+            }
+            let started = std::time::Instant::now();
+            let result = http::download_with_headers(
+                &url,
+                12 * 1024 * 1024,
+                self.timeout.min(Duration::from_secs(15)),
+                stream::tls_config(self.strict_tls),
+                &self.gateway_headers(),
+                &mut |_, _| started.elapsed() < Duration::from_secs(30),
+            );
+            health.record(&result);
+            result.map_err(|e| e.to_string())
+        })
     }
 }
 

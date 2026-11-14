@@ -178,7 +178,7 @@ impl Page<Kindlia> for TextPage {
         if matches!(e, InputEvent::Gesture(g) if g.kind == kn_platform::GestureKind::Down) {
             return Transition::None;
         }
-        match hit(cx, e) {
+        match page_hit(cx, e) {
             Some(1) => return Transition::Back,
             Some(2) => self.index = self.index.saturating_sub(1),
             Some(3) if self.index + 1 < self.pages.len() => self.index += 1,

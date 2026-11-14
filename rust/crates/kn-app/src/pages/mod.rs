@@ -16,8 +16,8 @@ pub mod me;
 pub mod ranks;
 pub mod reader;
 pub mod settings;
-pub mod storage;
 pub mod stats;
+pub mod storage;
 pub mod text;
 pub mod update;
 
@@ -35,8 +35,8 @@ pub fn hit(cx: &Cx<Kindlia>, event: &InputEvent) -> Option<u32> {
             return cx
                 .hits
                 .at(kn_render::Point {
-                    x: g.end.0,
-                    y: g.end.1,
+                    x: g.start.0,
+                    y: g.start.1,
                 })
                 .map(|id| id.0);
         }
@@ -99,7 +99,7 @@ pub fn tab_input(
         kn_ui::Transition::Root(match i {
             0 => Box::new(library::LibraryPage::shelf()),
             1 if cx.app.repo.api.signed_in() => {
-                Box::new(cloud::CloudPage::new(cloud::Mode::History))
+                Box::new(cloud::CloudPage::root(cloud::Mode::History))
             }
             1 => Box::new(library::LibraryPage::history()),
             2 => Box::new(library::LibraryPage::discover()),
@@ -179,6 +179,14 @@ pub fn search_header(cx: &mut Cx<Kindlia>, frame: &mut Bitmap, title: &str, back
             .add(HitId(1), Rect::new(0, 0, m.header_h(), m.header_h()));
     }
 }
+/// Keep standalone and edge cells inside the same horizontal content margins.
+fn control_rect(width: u32, margin: u32, rect: Rect) -> Rect {
+    let side = margin as i32;
+    let left = rect.x.max(side - 5);
+    let right = rect.right().min(width as i32 - side + 5).max(left);
+    Rect::new(left, rect.y, (right - left) as u32, rect.h).inflate(-5)
+}
+
 pub fn selected_button(
     cx: &mut Cx<Kindlia>,
     frame: &mut Bitmap,
@@ -198,7 +206,7 @@ pub fn selected_button(
         frame,
         &cx.theme,
         &m,
-        rect.inflate(-5),
+        control_rect(cx.width, m.margin, rect),
         text,
         if selected {
             ButtonStyle::Primary
@@ -206,7 +214,9 @@ pub fn selected_button(
             ButtonStyle::Secondary
         },
     );
-    cx.hits.add(HitId(id), rect).rounded(m.radius);
+    cx.hits
+        .add(HitId(id), control_rect(cx.width, m.margin, rect))
+        .rounded(m.radius);
 }
 pub fn label(cx: &mut Cx<Kindlia>, frame: &mut Bitmap, rect: Rect, text: &str, muted: bool) {
     let mut ink = Ink {
@@ -235,7 +245,7 @@ pub fn option_button(
     id: u32,
 ) {
     let m = cx.app.metrics;
-    let r = rect.inflate(-5);
+    let r = control_rect(cx.width, m.margin, rect);
     frame.rounded_rect(
         r,
         m.radius,
@@ -264,7 +274,9 @@ pub fn option_button(
         m.small,
         cx.theme.muted,
     );
-    cx.hits.add(HitId(id), rect).rounded(m.radius);
+    cx.hits
+        .add(HitId(id), control_rect(cx.width, m.margin, rect))
+        .rounded(m.radius);
 }
 pub fn button(
     cx: &mut Cx<Kindlia>,
@@ -285,7 +297,7 @@ pub fn button(
         frame,
         &cx.theme,
         &m,
-        rect.inflate(-5),
+        control_rect(cx.width, m.margin, rect),
         text,
         if enabled {
             ButtonStyle::Secondary
@@ -294,7 +306,7 @@ pub fn button(
         },
     );
     cx.hits
-        .add(HitId(id), rect)
+        .add(HitId(id), control_rect(cx.width, m.margin, rect))
         .enabled(enabled)
         .rounded(m.radius);
 }
@@ -323,10 +335,13 @@ pub fn row(
         meta,
     );
     if let Some(id) = id {
-        cx.hits.add(HitId(id), rect).long_press();
+        cx.hits.add(HitId(id), rect);
     }
 }
 pub fn pager(cx: &mut Cx<Kindlia>, frame: &mut Bitmap, page: usize, pages: usize, bottom: u32) {
+    if pages <= 1 {
+        return;
+    }
     let m = cx.app.metrics;
     let rect = Rect::new(
         0,
@@ -354,3 +369,80 @@ pub fn pager(cx: &mut Cx<Kindlia>, frame: &mut Bitmap, page: usize, pages: usize
 }
 
 pub mod image;
+
+/// Start-coordinate taps and list swipes share the same guarded page actions.
+pub fn page_hit(cx: &Cx<Kindlia>, event: &InputEvent) -> Option<u32> {
+    match event {
+        InputEvent::Gesture(g) => match g.kind {
+            GestureKind::SwipeLeft | GestureKind::SwipeUp => Some(3),
+            GestureKind::SwipeRight | GestureKind::SwipeDown => Some(2),
+            _ => hit(cx, event),
+        },
+        _ => hit(cx, event),
+    }
+}
+pub fn is_root_page(id: kn_ui::PageId) -> bool {
+    matches!(id.0, 10 | 11 | 12 | 13 | 14 | 15 | 130)
+}
+
+pub fn state_message(
+    cx: &mut Cx<Kindlia>,
+    frame: &mut Bitmap,
+    area: Rect,
+    text: &str,
+    action: Option<(&str, u32)>,
+) {
+    let mut ink = Ink {
+        fonts: cx.fonts,
+        glyphs: cx.glyphs,
+        chain: &cx.app.ui_fonts,
+    };
+    widgets::state_message(
+        &mut ink,
+        frame,
+        cx.hits,
+        &cx.theme,
+        &cx.app.metrics,
+        area,
+        text,
+        action.map(|(s, n)| (s, HitId(n))),
+    );
+}
+
+pub fn folder_row(
+    cx: &mut Cx<Kindlia>,
+    frame: &mut Bitmap,
+    rect: Rect,
+    title: &str,
+    subtitle: &str,
+    id: u32,
+) {
+    let m = cx.app.metrics;
+    let w = m.touch / 2;
+    let h = w * 3 / 4;
+    let x = m.margin as i32;
+    let y = rect.y + (rect.h - h) as i32 / 2;
+    frame.rounded_rect(
+        Rect::new(x, y, w, h),
+        m.radius / 3,
+        None,
+        Some(cx.theme.foreground),
+        2,
+    );
+    frame.fill_rect(Rect::new(x + 3, y - 4, w / 2, 5), cx.theme.foreground);
+    row(
+        cx,
+        frame,
+        Rect::new(
+            (w + m.margin) as i32,
+            rect.y,
+            rect.w.saturating_sub(w + m.margin),
+            rect.h,
+        ),
+        title,
+        subtitle,
+        "",
+        None,
+    );
+    cx.hits.add(HitId(id), rect).long_press();
+}

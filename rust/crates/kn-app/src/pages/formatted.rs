@@ -11,6 +11,7 @@ pub struct FormattedPage {
     body: String,
     lines: Vec<Line>,
     page: usize,
+    pages: usize,
     expanded: HashSet<String>,
     actions: Vec<Action>,
     bg: Option<Bitmap>,
@@ -22,6 +23,7 @@ impl FormattedPage {
             body: body.into(),
             lines: vec![],
             page: 0,
+            pages: 1,
             expanded: Default::default(),
             actions: vec![],
             bg: None,
@@ -71,6 +73,7 @@ impl Page<Kindlia> for FormattedPage {
             );
         }
         let pages = self.lines.len().div_ceil(rows).max(1);
+        self.pages = pages;
         self.page = self.page.min(pages - 1);
         let count = self.lines.iter().skip(self.page * rows).take(rows).count();
         let h = 2 * m.margin + 2 * m.touch + count.max(1) as u32 * line_h;
@@ -145,10 +148,10 @@ impl Page<Kindlia> for FormattedPage {
         );
     }
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, e: &InputEvent) -> Transition<Kindlia> {
-        match hit(cx, e) {
+        match page_hit(cx, e) {
             Some(1) => return Transition::Back,
             Some(2) => self.page = self.page.saturating_sub(1),
-            Some(3) => self.page += 1,
+            Some(3) if self.page + 1 < self.pages => self.page += 1,
             Some(id) if id >= 500_000 => {
                 if let Some(a) = self.actions.get((id - 500_000) as usize).cloned() {
                     match a {

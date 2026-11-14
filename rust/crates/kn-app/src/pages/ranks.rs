@@ -12,10 +12,32 @@ const CATEGORIES: [(&str, &str, usize); 4] = [
 ];
 impl Page<Kindlia> for RankCategories {
     fn id(&self) -> PageId {
-        PageId(57)
+        PageId(13)
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, f: &mut Bitmap) {
-        header(cx, f, "排行", true);
+        header(cx, f, "发现", false);
+        let m = cx.app.metrics;
+        let mut ink = kn_ui::widgets::Ink {
+            fonts: cx.fonts,
+            glyphs: cx.glyphs,
+            chain: &cx.app.ui_fonts,
+        };
+        widgets::segmented(
+            &mut ink,
+            f,
+            cx.hits,
+            &cx.theme,
+            &m,
+            Rect::new(
+                m.margin as i32,
+                m.header_h() as i32,
+                cx.width - 2 * m.margin,
+                m.touch,
+            ),
+            &["Web小说", "文库小说", "排行"],
+            2,
+            50,
+        );
         let m = cx.app.metrics;
         for (i, (name, _, _)) in CATEGORIES.iter().enumerate() {
             row(
@@ -23,7 +45,7 @@ impl Page<Kindlia> for RankCategories {
                 f,
                 Rect::new(
                     0,
-                    (m.header_h() + i as u32 * m.row_h()) as i32,
+                    (m.header_h() + m.touch + i as u32 * m.row_h()) as i32,
                     cx.width,
                     m.row_h(),
                 ),
@@ -44,7 +66,12 @@ impl Page<Kindlia> for RankCategories {
             return t;
         }
         match hit(cx, e) {
-            Some(1) => Transition::Back,
+            Some(50) => Transition::Root(Box::new(library::LibraryPage::discover())),
+            Some(51) => Transition::Root(Box::new(cloud::CloudPage::root(cloud::Mode::Wenku(
+                String::new(),
+                0,
+            )))),
+            Some(52) => Transition::None,
             Some(id) if (100..104).contains(&id) => {
                 let (_, p, k) = CATEGORIES[(id - 100) as usize];
                 Transition::Push(Box::new(cloud::CloudPage::rank(p, k)))

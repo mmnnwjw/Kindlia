@@ -4,6 +4,7 @@ pub mod error;
 pub mod gzip;
 pub mod health;
 pub mod http;
+mod pool;
 pub mod rate_limit;
 pub mod stream;
 pub mod turn;

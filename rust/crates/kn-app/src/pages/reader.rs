@@ -28,7 +28,7 @@ struct ChapterResult(
 );
 struct VolumeResult(u64, Result<NovelKey, String>);
 struct NovelResult(Result<Loaded<Novel>, String>);
-struct ImageResult(u64,String, Result<Bitmap, String>);
+struct ImageResult(u64, String, Result<Bitmap, String>);
 struct Prefetched;
 struct FontResult(String, Result<Vec<u8>, String>, f64);
 struct CachedChapter {
@@ -55,9 +55,20 @@ fn text_signature(c: &crate::store::Config) -> String {
     )
 }
 fn page_signature(cx: &Cx<Kindlia>) -> String {
-    let c=&cx.app.config;
-    crate::model::digest(&(text_signature(c),cx.width,cx.height,c.font_size,c.line_spacing,c.margin,
-        &c.reader_font,c.paragraph_spacing,c.first_line_indent,c.landscape,&c.landscape_side))
+    let c = &cx.app.config;
+    crate::model::digest(&(
+        text_signature(c),
+        cx.width,
+        cx.height,
+        c.font_size,
+        c.line_spacing,
+        c.margin,
+        &c.reader_font,
+        c.paragraph_spacing,
+        c.first_line_indent,
+        c.landscape,
+        &c.landscape_side,
+    ))
 }
 enum ImageSlot {
     Loading,
@@ -86,20 +97,28 @@ fn image_area(rects: &[Rect]) -> u64 {
     let mut xs: Vec<_> = rects.iter().flat_map(|r| [r.x, r.right()]).collect();
     xs.sort_unstable();
     xs.dedup();
-    xs.windows(2).map(|x| {
-        let mut spans: Vec<_> = rects.iter().filter(|r| r.x < x[1] && r.right() > x[0]).map(|r| (r.y, r.bottom())).collect();
-        spans.sort_unstable();
-        let mut bottom = i32::MIN;
-        let mut height = 0u64;
-        for (y, end) in spans {
-            height += (end - y.max(bottom)).max(0) as u64;
-            bottom = bottom.max(end);
-        }
-        (x[1] - x[0]) as u64 * height
-    }).sum()
+    xs.windows(2)
+        .map(|x| {
+            let mut spans: Vec<_> = rects
+                .iter()
+                .filter(|r| r.x < x[1] && r.right() > x[0])
+                .map(|r| (r.y, r.bottom()))
+                .collect();
+            spans.sort_unstable();
+            let mut bottom = i32::MIN;
+            let mut height = 0u64;
+            for (y, end) in spans {
+                height += (end - y.max(bottom)).max(0) as u64;
+                bottom = bottom.max(end);
+            }
+            (x[1] - x[0]) as u64 * height
+        })
+        .sum()
 }
 
 pub struct ReaderPage {
+    anchors: kn_text::AnchorIndex,
+    enter_last: bool,
     key: NovelKey,
     chain: Vec<FontId>,
     font_name: String,
@@ -126,14 +145,14 @@ pub struct ReaderPage {
     layout: Option<LayoutParams>,
     target: Option<(String, usize)>,
     images: HashMap<String, ImageSlot>,
-    image_versions: HashMap<String,u64>,
+    image_versions: HashMap<String, u64>,
     drawn_images: Option<ImageFrame>,
     shown_images: Option<ImageFrame>,
     loading: bool,
     load_started: Option<std::time::Instant>,
     progress_store: Option<crate::store::Store>,
     bookmarks: Vec<(String, String, usize)>,
-    saved_anchor: Option<(NovelKey, String, String, usize)>,
+    saved_anchor: Option<(NovelKey, String, String, usize, usize)>,
     page_bitmaps: Vec<(usize, Bitmap)>,
     target_seen: bool,
     bitmap_style: String,
@@ -143,19 +162,42 @@ pub struct ReaderPage {
 }
 impl ReaderPage {
     fn stats_book(&mut self, cx: &Cx<Kindlia>) -> (String, String) {
-        let id = self.stats_key.get_or_insert_with(|| {
-            let source = (self.key.provider_id == "epub")
-                .then(|| cx.app.repo.store.read_cache::<serde_json::Value>("epub-source", &self.key))
-                .flatten();
-            let key = source.as_ref().and_then(|v| v["novel"].as_str())
-                .map(|id| NovelKey { provider_id: "wenku".into(), novel_id: id.into() })
-                .unwrap_or_else(|| self.key.clone());
-            crate::model::digest(&key)
-        }).clone();
-        let title = self.novel.as_ref().map(|n| n.title().to_owned())
-            .or_else(|| self.chapter.as_ref().and_then(|c| {
-                c.novel_title_zh.as_ref().filter(|s| !s.is_empty()).or(c.novel_title_jp.as_ref()).cloned()
-            })).unwrap_or_else(|| self.key.novel_id.clone());
+        let id = self
+            .stats_key
+            .get_or_insert_with(|| {
+                let source = (self.key.provider_id == "epub")
+                    .then(|| {
+                        cx.app
+                            .repo
+                            .store
+                            .read_cache::<serde_json::Value>("epub-source", &self.key)
+                    })
+                    .flatten();
+                let key = source
+                    .as_ref()
+                    .and_then(|v| v["novel"].as_str())
+                    .map(|id| NovelKey {
+                        provider_id: "wenku".into(),
+                        novel_id: id.into(),
+                    })
+                    .unwrap_or_else(|| self.key.clone());
+                crate::model::digest(&key)
+            })
+            .clone();
+        let title = self
+            .novel
+            .as_ref()
+            .map(|n| n.title().to_owned())
+            .or_else(|| {
+                self.chapter.as_ref().and_then(|c| {
+                    c.novel_title_zh
+                        .as_ref()
+                        .filter(|s| !s.is_empty())
+                        .or(c.novel_title_jp.as_ref())
+                        .cloned()
+                })
+            })
+            .unwrap_or_else(|| self.key.novel_id.clone());
         (id, title)
     }
     fn stop_tracking(&mut self, cx: &Cx<Kindlia>) {
@@ -165,8 +207,12 @@ impl ReaderPage {
         }
     }
     fn start_tracking(&mut self) {
-        if self.chapter.is_some() && !self.pages.is_empty() && self.target.is_none()
-            && !self.loading && self.font_loading.is_none() {
+        if self.chapter.is_some()
+            && !self.pages.is_empty()
+            && self.target.is_none()
+            && !self.loading
+            && self.font_loading.is_none()
+        {
             self.tracker.start();
         }
     }
@@ -179,23 +225,65 @@ impl ReaderPage {
         )
     }
     fn bookmark_on_page(&self) -> Option<usize> {
-        let (path, offset) = self.anchor()?;
-        self.bookmarks
-            .iter()
-            .position(|(c, p, o)| c == &self.chapter_id && p == &path && *o == offset)
+        self.bookmarks.iter().position(|(c, p, o)| {
+            c == &self.chapter_id
+                && self.anchors.settled(p, self.done)
+                && kn_text::page_for_path(&self.pages, p, Some(*o as i64), usize::MAX) == self.index
+        })
     }
     fn bookmark(&mut self, cx: &mut Cx<Kindlia>) {
         if let Some((path, offset)) = self.anchor() {
             let store = &cx.app.repo.store;
             let mut bookmarks: Vec<(String, String, usize)> = store.bookmarks(&self.key);
             let entry = (self.chapter_id.clone(), path, offset);
-            if let Some(i) = bookmarks.iter().position(|e| e == &entry) {
+            if let Some(i) = bookmarks
+                .iter()
+                .position(|e| e == &entry)
+                .or_else(|| self.bookmark_on_page())
+            {
                 bookmarks.remove(i);
             } else {
+                let title = self
+                    .chapter
+                    .as_ref()
+                    .map(|c| {
+                        c.title_zh
+                            .clone()
+                            .filter(|t| !t.is_empty())
+                            .unwrap_or_else(|| c.title_jp.clone())
+                    })
+                    .unwrap_or_default();
+                let excerpt = self
+                    .pages
+                    .get(self.index)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| {
+                        if let PageItem::Text { text, .. } = p {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<String>();
+                store.save_bookmark_info(
+                    &self.key,
+                    &entry,
+                    &title,
+                    &excerpt.chars().take(80).collect::<String>(),
+                );
                 bookmarks.push(entry);
             }
             match store.save_bookmarks(&self.key, &bookmarks) {
-                Ok(()) => self.bookmarks = bookmarks,
+                Ok(()) => {
+                    let added = bookmarks.len() > self.bookmarks.len();
+                    self.bookmarks = bookmarks;
+                    cx.toast(if added {
+                        "已添加书签"
+                    } else {
+                        "已移除书签"
+                    });
+                }
                 Err(e) => self.notice = e,
             }
         }
@@ -733,6 +821,8 @@ impl ReaderPage {
             loading: false,
             load_started: None,
             progress_store: None,
+            anchors: kn_text::AnchorIndex::default(),
+            enter_last: false,
             bookmarks: vec![],
             saved_anchor: None,
             page_bitmaps: vec![],
@@ -821,28 +911,49 @@ impl ReaderPage {
             if local_key.provider_id == "epub" {
                 match crate::epub::load_chapter(&local_repo.store, &local_key, &local_id) {
                     Ok((chapter, document)) => {
-                        poster.post(ChapterResult(generation, Ok((Loaded {
-                            value: chapter,
-                            notice: None,
-                        }, Some(document)))));
+                        poster.post(ChapterResult(
+                            generation,
+                            Ok((
+                                Loaded {
+                                    value: chapter,
+                                    notice: None,
+                                },
+                                Some(document),
+                            )),
+                        ));
                         return;
                     }
                     Err(error) if local_repo.offline => {
-                        poster.post(ChapterResult(generation, Err(format!("文库卷未缓存：{error}"))));
+                        poster.post(ChapterResult(
+                            generation,
+                            Err(format!("文库卷未缓存：{error}")),
+                        ));
                         return;
                     }
                     Err(_) => {}
                 }
             } else if local_repo.offline || !refresh {
-                if let Some(chapter) = local_repo.store.read_cache("chapters", &(&local_key, &local_id)) {
-                    poster.post(ChapterResult(generation, Ok((Loaded {
-                        value: chapter,
-                        notice: local_repo.offline.then(|| "离线缓存".into()),
-                    }, None))));
+                if let Some(chapter) = local_repo
+                    .store
+                    .read_cache("chapters", &(&local_key, &local_id))
+                {
+                    poster.post(ChapterResult(
+                        generation,
+                        Ok((
+                            Loaded {
+                                value: chapter,
+                                notice: local_repo.offline.then(|| "离线缓存".into()),
+                            },
+                            None,
+                        )),
+                    ));
                     return;
                 }
                 if local_repo.offline {
-                    poster.post(ChapterResult(generation, Err("离线模式：此内容尚未缓存".into())));
+                    poster.post(ChapterResult(
+                        generation,
+                        Err("离线模式：此内容尚未缓存".into()),
+                    ));
                     return;
                 }
             }
@@ -916,12 +1027,14 @@ impl ReaderPage {
             }
             let repo = cx.app.repo.clone();
             let key = self.key.clone();
-            if let Some(spawner) = cx.spawner() { spawner.spawn_on(kn_ui::Lane::Background,true,move || {
-                if let Err(e) = repo.chapter(&key, &id, false) {
-                    eprintln!("[prefetch] {e}");
-                }
-                Prefetched
-            }); }
+            if let Some(spawner) = cx.spawner() {
+                spawner.spawn_on(kn_ui::Lane::Background, true, move || {
+                    if let Err(e) = repo.chapter(&key, &id, false) {
+                        eprintln!("[prefetch] {e}");
+                    }
+                    Prefetched
+                });
+            }
         }
     }
     fn ensure_layout(&mut self, cx: &mut Cx<Kindlia>) {
@@ -946,7 +1059,12 @@ impl ReaderPage {
                 self.target = self.anchor();
             }
             let name = cx.app.config.reader_font.clone();
-            let cached = name.is_empty() || cx.app.reader_font_cache.as_ref().is_some_and(|(n, _)| *n == name);
+            let cached = name.is_empty()
+                || cx
+                    .app
+                    .reader_font_cache
+                    .as_ref()
+                    .is_some_and(|(n, _)| *n == name);
             if !cached {
                 if self.font_loading.as_ref() != Some(&name) {
                     self.stop_tracking(cx);
@@ -980,7 +1098,7 @@ impl ReaderPage {
         let scale = cx.app.dpi as f64 / 300.0;
         let params = LayoutParams {
             width: cx.width as i64,
-            height: cx.height.saturating_sub(cx.app.metrics.touch) as i64,
+            height: cx.height.saturating_sub(cx.app.metrics.touch / 2) as i64,
             font_size: (cx.app.config.font_size as f64 * scale).round().max(12.0) as u32,
             margin: (cx.app.config.margin as f64 * scale).round() as i64,
             line_spacing: cx.app.config.line_spacing,
@@ -1011,7 +1129,50 @@ impl ReaderPage {
         self.image_versions.clear();
         self.page_bitmaps.clear();
         self.widths.clear();
+        self.anchors = kn_text::AnchorIndex::new(&self.blocks);
         self.paginator = Some(Paginator::new(self.blocks.clone(), params));
+        self.settle_entry(cx);
+    }
+    fn next_layout_page(&mut self, cx: &mut Cx<Kindlia>) {
+        let mut measure = FontMeasure::new(cx.fonts, &self.chain, &mut self.widths);
+        match self
+            .paginator
+            .as_mut()
+            .and_then(|p| p.next_page(&mut measure))
+        {
+            Some(page) => {
+                self.anchors.add_page(&page);
+                self.pages.push(page);
+            }
+            None => {
+                self.done = true;
+                self.paginator = None;
+            }
+        }
+    }
+    fn settle_entry(&mut self, cx: &mut Cx<Kindlia>) {
+        while self.paginator.is_some()
+            && (self.pages.is_empty()
+                || self.enter_last
+                || self
+                    .target
+                    .as_ref()
+                    .is_some_and(|(p, _)| !self.anchors.settled(p, self.done)))
+        {
+            self.next_layout_page(cx);
+        }
+        if self.enter_last {
+            self.index = self.pages.len().saturating_sub(1);
+            self.enter_last = false;
+            self.target = None;
+        } else if let Some((path, offset)) = self.target.take() {
+            self.index = kn_text::page_for_path(&self.pages, &path, Some(offset as i64), 0);
+        }
+    }
+    fn paginate_all(&mut self, cx: &mut Cx<Kindlia>) {
+        while self.paginator.is_some() {
+            self.next_layout_page(cx);
+        }
     }
     fn save(&mut self, cx: &mut Cx<Kindlia>) {
         if let Some(error) = cx.app.progress_writer.take_error() {
@@ -1027,6 +1188,7 @@ impl ReaderPage {
                 self.chapter_id.clone(),
                 path.clone(),
                 offset,
+                if self.done { self.pages.len() } else { 0 },
             );
             if self.saved_anchor.as_ref() == Some(&anchor) {
                 return;
@@ -1040,6 +1202,13 @@ impl ReaderPage {
                 .or(chapter.novel_title_jp.as_deref())
                 .unwrap_or(&self.key.novel_id);
             let progress = Progress {
+                chapter_title: chapter
+                    .title_zh
+                    .clone()
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| chapter.title_jp.clone()),
+                page: self.index + 1,
+                pages: if self.done { self.pages.len() } else { 0 },
                 chapter_id: self.chapter_id.clone(),
                 path,
                 offset,
@@ -1050,14 +1219,27 @@ impl ReaderPage {
             };
             let store = self.progress_store.as_ref().unwrap_or(&cx.app.repo.store);
             let save_started = std::time::Instant::now();
-            let user = if cx.app.repo.api.signed_in() { cx.app.repo.api.username() } else { String::new() };
-            if let Err(e) = cx.app.progress_writer.save(store.clone(), self.key.clone(), title.into(), progress, user) {
+            let user = if cx.app.repo.api.signed_in() {
+                cx.app.repo.api.username()
+            } else {
+                String::new()
+            };
+            if let Err(e) = cx.app.progress_writer.save(
+                store.clone(),
+                self.key.clone(),
+                title.into(),
+                progress,
+                user,
+            ) {
                 self.notice = format!("进度保存失败: {e}");
             } else {
                 self.saved_anchor = Some(anchor);
             }
             if std::env::var_os("KN_DEBUG").is_some() {
-                eprintln!("[reader-save] staged progress + history {:.1} ms", save_started.elapsed().as_secs_f64()*1000.0);
+                eprintln!(
+                    "[reader-save] staged progress + history {:.1} ms",
+                    save_started.elapsed().as_secs_f64() * 1000.0
+                );
             }
         }
     }
@@ -1113,7 +1295,12 @@ impl ReaderPage {
             }
         }
         self.chapter_id = id;
-        self.target = None;
+        self.target = cx
+            .app
+            .repo
+            .store
+            .chapter_progress(&self.key, &self.chapter_id)
+            .map(|p| (p.path, p.offset));
         self.menu = false;
         if let Some(i) = self
             .chapter_cache
@@ -1131,9 +1318,14 @@ impl ReaderPage {
             self.index = cache.index;
             self.done = cache.done;
             self.paginator = cache.paginator;
+            self.anchors = kn_text::AnchorIndex::new(&self.blocks);
+            for p in &self.pages {
+                self.anchors.add_page(p);
+            }
+            self.settle_entry(cx);
             self.loading = false;
             self.images.clear();
-        self.image_versions.clear();
+            self.image_versions.clear();
             self.page_bitmaps.clear();
             self.notice.clear();
             self.prefetch(cx);
@@ -1151,10 +1343,36 @@ impl ReaderPage {
             self.index += 1;
         } else if !forward && self.index > 0 {
             self.index -= 1;
-        } else if self.done {
+        } else if !forward || self.done {
             if let Some(id) = self.adjacent(forward) {
                 self.change_chapter(cx, id);
+                self.target = None;
+                self.enter_last = !forward;
+                if self.chapter.is_some() {
+                    if !forward {
+                        self.paginate_all(cx);
+                    }
+                    self.index = if forward {
+                        0
+                    } else {
+                        self.pages.len().saturating_sub(1)
+                    };
+                    self.enter_last = false;
+                }
                 return;
+            }
+        } else if forward {
+            self.next_layout_page(cx);
+            if self.index + 1 < self.pages.len() {
+                self.index += 1;
+            } else if self.done {
+                if let Some(id) = self.adjacent(true) {
+                    self.change_chapter(cx, id);
+                    self.target = None;
+                    self.enter_last = false;
+                    self.index = 0;
+                    return;
+                }
             }
         }
         if self.index != previous {
@@ -1253,12 +1471,7 @@ impl ReaderPage {
                         let key = format!("{url}|{width}x{height}");
                         if let Some(ImageSlot::Ready(image)) = self.images.get(&key) {
                             let actual = image_rect(image, rect);
-                            frame.blit(
-                                image,
-                                image.bounds(),
-                                actual.x,
-                                actual.y,
-                            );
+                            frame.blit(image, image.bounds(), actual.x, actual.y);
                         } else {
                             label(
                                 cx,
@@ -1297,14 +1510,24 @@ impl ReaderPage {
     }
     fn images(&mut self, cx: &mut Cx<Kindlia>) {
         let mut todo = Vec::new();
-        for page in [Some(self.index), self.index.checked_add(1), self.index.checked_sub(1)].into_iter().flatten().filter_map(|i| self.pages.get(i)) {
+        for page in [
+            Some(self.index),
+            self.index.checked_add(1),
+            self.index.checked_sub(1),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|i| self.pages.get(i))
+        {
             for item in page {
                 if let PageItem::Image {
                     url, width, height, ..
                 } = item
                 {
                     let key = format!("{url}|{width}x{height}");
-                    if !self.images.contains_key(&key) || matches!(self.images.get(&key), Some(ImageSlot::Failed(at)) if at.elapsed() >= crate::images::RETRY_AFTER) {
+                    if !self.images.contains_key(&key)
+                        || matches!(self.images.get(&key), Some(ImageSlot::Failed(at)) if at.elapsed() >= crate::images::RETRY_AFTER)
+                    {
                         self.images.insert(key.clone(), ImageSlot::Loading);
                         todo.push((key, url.clone(), (*width as u32, *height as u32)));
                     }
@@ -1312,8 +1535,10 @@ impl ReaderPage {
             }
         }
         for (key, url, size) in todo {
-            let generation=self.generation;
-            crate::images::spawn_fit(cx,cx.app.repo.clone(),url,size,move |r| ImageResult(generation,key,r));
+            let generation = self.generation;
+            crate::images::spawn_fit(cx, cx.app.repo.clone(), url, size, move |r| {
+                ImageResult(generation, key, r)
+            });
         }
         // 仅保留当前和相邻页图像，磁盘原图缓存不受影响。
         let keep: std::collections::HashSet<String> = self
@@ -1373,8 +1598,7 @@ impl Page<Kindlia> for ReaderPage {
                 .app
                 .repo
                 .store
-                .progress(&self.key)
-                .filter(|p| p.chapter_id == self.chapter_id)
+                .chapter_progress(&self.key, &self.chapter_id)
                 .map(|p| (p.path, p.offset));
             self.load(cx, false);
         } else if returning && self.text_signature != text_signature(&cx.app.config) {
@@ -1419,7 +1643,13 @@ impl Page<Kindlia> for ReaderPage {
         if self.novel.is_none() {
             let repo = cx.app.repo.clone();
             let key = self.key.clone();
-            crate::repository::read_on_workers(cx, repo, false, move |r| r.novel(&key, false), NovelResult);
+            crate::repository::read_on_workers(
+                cx,
+                repo,
+                false,
+                move |r| r.novel(&key, false),
+                NovelResult,
+            );
         }
     }
     fn leave(&mut self, cx: &mut Cx<Kindlia>) {
@@ -1438,12 +1668,20 @@ impl Page<Kindlia> for ReaderPage {
         cx.after(Duration::from_secs(30), 1);
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, frame: &mut Bitmap) {
-        self.drawn_images=None;
+        self.drawn_images = None;
         self.ensure_layout(cx);
         if self.font_loading.is_some() {
             self.draw_header(cx, frame, (cx.app.metrics.touch / 2) as i32);
-            if self.menu { self.draw_chrome(cx, frame); }
-            label(cx, frame, Rect::new(0, (cx.height / 3) as i32, cx.width, cx.app.metrics.touch), "正在加载字体…", true);
+            if self.menu {
+                self.draw_chrome(cx, frame);
+            }
+            label(
+                cx,
+                frame,
+                Rect::new(0, (cx.height / 3) as i32, cx.width, cx.app.metrics.touch),
+                "正在加载字体…",
+                true,
+            );
             return;
         }
         let m = cx.app.metrics;
@@ -1456,13 +1694,35 @@ impl Page<Kindlia> for ReaderPage {
             self.paint_content(cx, frame, self.index);
         }
         if let Some(items) = self.pages.get(self.index) {
-            for (position,item) in items.iter().enumerate() {
-                if let PageItem::Image{url,x,y,width,height,..}=item {
-                    let area = Rect::new(*x as i32, *y as i32 + content_top as i32, *width as u32, *height as u32);
-                    if let Some(ImageSlot::Ready(image)) = self.images.get(&format!("{url}|{width}x{height}")) {
-                        let visible = Rect::new(0, content_top as i32, cx.width, cx.height.saturating_sub(content_top));
+            for (position, item) in items.iter().enumerate() {
+                if let PageItem::Image {
+                    url,
+                    x,
+                    y,
+                    width,
+                    height,
+                    ..
+                } = item
+                {
+                    let area = Rect::new(
+                        *x as i32,
+                        *y as i32 + content_top as i32,
+                        *width as u32,
+                        *height as u32,
+                    );
+                    if let Some(ImageSlot::Ready(image)) =
+                        self.images.get(&format!("{url}|{width}x{height}"))
+                    {
+                        let visible = Rect::new(
+                            0,
+                            content_top as i32,
+                            cx.width,
+                            cx.height.saturating_sub(content_top),
+                        );
                         if let Some(actual) = image_rect(image, area).intersect(&visible) {
-                            cx.hits.add(HitId(800_000 + position as u32), actual).no_feedback();
+                            cx.hits
+                                .add(HitId(800_000 + position as u32), actual)
+                                .no_feedback();
                         }
                     }
                 }
@@ -1482,21 +1742,65 @@ impl Page<Kindlia> for ReaderPage {
                                 *y as i32 + content_top as i32,
                                 *width as u32,
                                 *height as u32,
-                            ),
+                            )
+                            .inflate((*height / 2) as i32),
                         )
                         .no_feedback();
                 }
             }
         }
-        let content=Rect::new(0,content_top as i32,cx.width,cx.height-content_top);
-        let visible_images:Vec<_>=self.pages.get(self.index).into_iter().flatten().filter_map(|item| {
-            let PageItem::Image{url,x,y,width,height,..}=item else{return None;};
-            let key=format!("{url}|{width}x{height}");let Some(ImageSlot::Ready(image))=self.images.get(&key) else{return None;};
-            let actual=image_rect(image,Rect::new(*x as i32,*y as i32+content_top as i32,*width as u32,*height as u32)).intersect(&content)?;
-            Some((actual,key.clone(),*self.image_versions.get(&key).unwrap_or(&0)))
-        }).collect();
-        let coverage=image_area(&visible_images.iter().map(|i|i.0).collect::<Vec<_>>()) as f32/frame.bounds().area() as f32;
-        self.drawn_images=Some(ImageFrame{page:(format!("{}:{}",self.key.cache_id(),self.chapter_id),self.generation,self.index,cx.width,cx.height),images:visible_images,coverage});
+        let content = Rect::new(0, content_top as i32, cx.width, cx.height - content_top);
+        let visible_images: Vec<_> = self
+            .pages
+            .get(self.index)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                let PageItem::Image {
+                    url,
+                    x,
+                    y,
+                    width,
+                    height,
+                    ..
+                } = item
+                else {
+                    return None;
+                };
+                let key = format!("{url}|{width}x{height}");
+                let Some(ImageSlot::Ready(image)) = self.images.get(&key) else {
+                    return None;
+                };
+                let actual = image_rect(
+                    image,
+                    Rect::new(
+                        *x as i32,
+                        *y as i32 + content_top as i32,
+                        *width as u32,
+                        *height as u32,
+                    ),
+                )
+                .intersect(&content)?;
+                Some((
+                    actual,
+                    key.clone(),
+                    *self.image_versions.get(&key).unwrap_or(&0),
+                ))
+            })
+            .collect();
+        let coverage = image_area(&visible_images.iter().map(|i| i.0).collect::<Vec<_>>()) as f32
+            / frame.bounds().area() as f32;
+        self.drawn_images = Some(ImageFrame {
+            page: (
+                format!("{}:{}", self.key.cache_id(), self.chapter_id),
+                self.generation,
+                self.index,
+                cx.width,
+                cx.height,
+            ),
+            images: visible_images,
+            coverage,
+        });
         self.start_tracking();
         self.draw_header(cx, frame, content_top as i32);
         if self.menu || (self.chapter.is_none() && !self.loading) {
@@ -1513,14 +1817,25 @@ impl Page<Kindlia> for ReaderPage {
             }
         }
     }
-    fn refresh_hint(&self)->Option<RefreshHint> {
-        self.drawn_images.as_ref().filter(|f|f.needs_clean(self.shown_images.as_ref())).map(|_|RefreshHint::Flash)
+    fn refresh_hint(&self) -> Option<RefreshHint> {
+        self.drawn_images
+            .as_ref()
+            .filter(|f| f.needs_clean(self.shown_images.as_ref()))
+            .map(|_| RefreshHint::Flash)
     }
-    fn presented(&mut self) {if let Some(frame)=&self.drawn_images{self.shown_images=Some(frame.clone());}}
+    fn presented(&mut self) {
+        if let Some(frame) = &self.drawn_images {
+            self.shown_images = Some(frame.clone());
+        }
+    }
     fn on_idle(&mut self, cx: &mut Cx<Kindlia>) -> bool {
-        if self.font_loading.is_some() { return false; }
+        if self.font_loading.is_some() {
+            return false;
+        }
         self.ensure_layout(cx);
-        if self.font_loading.is_some() { return false; }
+        if self.font_loading.is_some() {
+            return false;
+        }
         let first = self.pages.is_empty();
         if let Some(paginator) = &mut self.paginator {
             let page_started = std::time::Instant::now();
@@ -1528,13 +1843,20 @@ impl Page<Kindlia> for ReaderPage {
             let start = self.pages.len();
             let mut resolved = false;
             match paginator.next_page(&mut measure) {
-                Some(page) => self.pages.push(page),
+                Some(page) => {
+                    self.anchors.add_page(&page);
+                    self.pages.push(page);
+                }
                 None => self.done = true,
             }
             if first && !self.pages.is_empty() && std::env::var_os("KN_DEBUG").is_some() {
-                eprintln!("[reader-load] first-page elapsed {:.1} ms, pagination {:.1} ms",
-                    self.load_started.map(|t| t.elapsed().as_secs_f64()*1000.0).unwrap_or(0.0),
-                    page_started.elapsed().as_secs_f64()*1000.0);
+                eprintln!(
+                    "[reader-load] first-page elapsed {:.1} ms, pagination {:.1} ms",
+                    self.load_started
+                        .map(|t| t.elapsed().as_secs_f64() * 1000.0)
+                        .unwrap_or(0.0),
+                    page_started.elapsed().as_secs_f64() * 1000.0
+                );
             }
             if let Some((path, offset)) = &self.target {
                 let mut past = false;
@@ -1585,7 +1907,11 @@ impl Page<Kindlia> for ReaderPage {
         self.paginator.is_some()
     }
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, event: &InputEvent) -> Transition<Kindlia> {
-        if let InputEvent::Key { code, pressed: true } = event {
+        if let InputEvent::Key {
+            code,
+            pressed: true,
+        } = event
+        {
             let forward = match code {
                 KeyCode::PageForward => Some(true),
                 KeyCode::PageBack => Some(false),
@@ -1642,6 +1968,7 @@ impl Page<Kindlia> for ReaderPage {
                     && g.kind != GestureKind::Down
                 {
                     self.target = None;
+                    self.paginate_all(cx);
                     let ratio = (g.end.0 - self.track.x).clamp(0, self.track.w as i32) as f32
                         / self.track.w.max(1) as f32;
                     self.index =
@@ -1649,6 +1976,21 @@ impl Page<Kindlia> for ReaderPage {
                     cx.after(Duration::from_secs(3), 1);
                     cx.request_redraw(RefreshHint::Ui);
                     return Transition::None;
+                }
+            }
+            if let InputEvent::Gesture(g) = event {
+                match g.kind {
+                    GestureKind::SwipeUp => {
+                        self.menu = false;
+                        cx.request_redraw(RefreshHint::Ui);
+                        return Transition::None;
+                    }
+                    GestureKind::SwipeLeft | GestureKind::SwipeRight => {
+                        self.menu = false;
+                        self.turn(cx, g.kind == GestureKind::SwipeLeft);
+                        return Transition::None;
+                    }
+                    _ => {}
                 }
             }
             match hit(cx, event) {
@@ -1728,14 +2070,22 @@ impl Page<Kindlia> for ReaderPage {
             cx.request_redraw(RefreshHint::Ui);
             return Transition::None;
         }
-        if let Some(id)=hit(cx,event).filter(|id|*id>=800_000) {
+        if let Some(id) = hit(cx, event).filter(|id| *id >= 800_000) {
             // A tap must both begin and end on this rendered image; crossing
             // the letterbox boundary while releasing must not open a preview.
-            if !matches!(event, InputEvent::Gesture(g) if cx.hits.at(kn_render::Point { x: g.start.0, y: g.start.1 }) == Some(HitId(id))) {
+            if !matches!(event, InputEvent::Gesture(g) if cx.hits.at(kn_render::Point { x: g.end.0, y: g.end.1 }) == Some(HitId(id)))
+            {
                 return Transition::None;
             }
-            if let Some(PageItem::Image{url,height,..})=self.pages.get(self.index).and_then(|p|p.get((id-800_000) as usize)) {
-                return Transition::Push(Box::new(super::image::ImagePage::new(url.clone(),*height as u32)));
+            if let Some(PageItem::Image { url, height, .. }) = self
+                .pages
+                .get(self.index)
+                .and_then(|p| p.get((id - 800_000) as usize))
+            {
+                return Transition::Push(Box::new(super::image::ImagePage::new(
+                    url.clone(),
+                    *height as u32,
+                )));
             }
         }
         if let Some(id) = hit(cx, event).filter(|id| *id >= 2000) {
@@ -1778,21 +2128,37 @@ impl Page<Kindlia> for ReaderPage {
     fn on_message(&mut self, cx: &mut Cx<Kindlia>, msg: Box<dyn Any + Send>) {
         let msg = match msg.downcast::<FontResult>() {
             Ok(r) => {
-                if self.font_loading.as_ref() != Some(&r.0) { return; }
+                if self.font_loading.as_ref() != Some(&r.0) {
+                    return;
+                }
                 self.font_loading = None;
                 if cx.app.config.reader_font != r.0 {
                     cx.request_redraw(RefreshHint::Ui);
                     return;
                 }
                 let at = std::time::Instant::now();
-                let (chain, notice) = crate::fonts::install(cx.fonts, cx.glyphs, &r.0, r.1, &cx.app.ui_fonts, &mut cx.app.reader_font_cache);
+                let (chain, notice) = crate::fonts::install(
+                    cx.fonts,
+                    cx.glyphs,
+                    &r.0,
+                    r.1,
+                    &cx.app.ui_fonts,
+                    &mut cx.app.reader_font_cache,
+                );
                 self.chain = chain;
                 self.font_name = r.0;
                 self.layout = None;
-                if let Some(notice) = notice { self.notice = notice; }
-                else if self.notice == "正在加载字体…" { self.notice.clear(); }
+                if let Some(notice) = notice {
+                    self.notice = notice;
+                } else if self.notice == "正在加载字体…" {
+                    self.notice.clear();
+                }
                 if std::env::var_os("KN_DEBUG").is_some() {
-                    eprintln!("[reader-font] worker io {:.1} ms, UI install {:.1} ms", r.2, at.elapsed().as_secs_f64()*1000.0);
+                    eprintln!(
+                        "[reader-font] worker io {:.1} ms, UI install {:.1} ms",
+                        r.2,
+                        at.elapsed().as_secs_f64() * 1000.0
+                    );
                 }
                 cx.request_redraw(RefreshHint::Ui);
                 return;
@@ -1828,7 +2194,13 @@ impl Page<Kindlia> for ReaderPage {
                             .unwrap_or(0)
                             .min(count.saturating_sub(1));
                         self.chapter_id = index.to_string();
-                        crate::repository::read_on_workers(cx, repo, false, move |r| r.novel(&key, false), NovelResult);
+                        crate::repository::read_on_workers(
+                            cx,
+                            repo,
+                            false,
+                            move |r| r.novel(&key, false),
+                            NovelResult,
+                        );
                         self.load(cx, false);
                         self.target = anchor;
                     }
@@ -1847,10 +2219,13 @@ impl Page<Kindlia> for ReaderPage {
                 self.loading = false;
                 match result.1 {
                     Ok((loaded, document)) => {
-                        if self.target.is_none() && self.key.provider_id=="epub" {
-                            if let Some((_,fragment))=self.chapter_id.split_once('#') {
-                                self.target=Some((format!("/epub-anchor/{}",crate::epub::unescape(fragment)),0));
-                                self.target_seen=false;
+                        if self.target.is_none() && self.key.provider_id == "epub" {
+                            if let Some((_, fragment)) = self.chapter_id.split_once('#') {
+                                self.target = Some((
+                                    format!("/epub-anchor/{}", crate::epub::unescape(fragment)),
+                                    0,
+                                ));
+                                self.target_seen = false;
                             }
                         }
                         self.document = document;
@@ -1888,7 +2263,7 @@ impl Page<Kindlia> for ReaderPage {
         };
         if let Ok(result) = msg.downcast::<ImageResult>() {
             // 尺寸和 URL 都匹配才接受，换章/重新排版后的旧任务不可覆盖当前页面。
-            if self.generation==result.0 && self.images.contains_key(&result.1) {
+            if self.generation == result.0 && self.images.contains_key(&result.1) {
                 let affected = |index: usize| {
                     self.pages.get(index).is_some_and(|p| p.iter().any(|item| {
                     matches!(item, PageItem::Image { url, width, height, .. } if format!("{url}|{width}x{height}") == result.1)
@@ -1906,7 +2281,7 @@ impl Page<Kindlia> for ReaderPage {
                         }
                     },
                 );
-                *self.image_versions.entry(result.1).or_default()+=1;
+                *self.image_versions.entry(result.1).or_default() += 1;
                 if visible {
                     cx.request_redraw(RefreshHint::Ui);
                 }
@@ -1920,7 +2295,8 @@ fn image_rect(image: &Bitmap, area: Rect) -> Rect {
     Rect::new(
         area.x + (area.w.saturating_sub(image.width()) / 2) as i32,
         area.y + (area.h.saturating_sub(image.height()) / 2) as i32,
-        image.width(), image.height(),
+        image.width(),
+        image.height(),
     )
 }
 

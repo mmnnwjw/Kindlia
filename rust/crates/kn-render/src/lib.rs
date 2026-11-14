@@ -8,9 +8,16 @@
 mod bitmap;
 mod geom;
 pub mod image;
+#[cfg(target_os = "linux")]
+mod mapped_font;
 mod text;
 
 pub use bitmap::Bitmap;
 pub use geom::{Point, Rect};
-pub use image::{decode_gray, decode_gray_with_budget, ImageBudget, height_bucket, ImageError, HEIGHT_BUCKETS};
-pub use text::{bold_strokes, decode_woff2, FontId, FontStore, FxHasher, FxMap, GlyphCache, GlyphStats, LineMetrics, Synth, TextError, TextStyle};
+pub use image::{
+    decode_gray, decode_gray_with_budget, height_bucket, ImageBudget, ImageError, HEIGHT_BUCKETS,
+};
+pub use text::{
+    bold_strokes, decode_woff2, FontId, FontStore, FxHasher, FxMap, GlyphCache, GlyphStats,
+    LineMetrics, Synth, TextError, TextStyle,
+};

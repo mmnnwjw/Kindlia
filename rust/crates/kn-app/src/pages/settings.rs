@@ -139,7 +139,13 @@ impl SettingsPage {
             Offline => on(self.draft.offline),
             Gateway => on(self.draft.gateway_enabled),
             UpdateAuto => on(self.draft.update_auto),
-            UpdateR2 => if self.draft.update_r2_url.is_empty(){"未配置".into()}else{self.draft.update_r2_url.clone()},
+            UpdateR2 => {
+                if self.draft.update_r2_url.is_empty() {
+                    "未配置".into()
+                } else {
+                    self.draft.update_r2_url.clone()
+                }
+            }
             GatewayKey => if self.draft.gateway_key.is_empty() {
                 "未设置"
             } else {
@@ -207,7 +213,7 @@ impl SettingsPage {
         use Field::*;
         Some(match f {
             CacheLimit => (self.draft.cache_limit_mb as f64, 64., 1024., 64.),
-            FontSize => (self.draft.font_size as f64, 28., 80., 4.),
+            FontSize => (self.draft.font_size as f64, 24., 96., 2.),
             Line => (self.draft.line_spacing, 1.0, 2.0, 0.05),
             Paragraph => (self.draft.paragraph_spacing, 0., 2.0, 0.05),
             Margin => (self.draft.margin as f64, 16., 96., 8.),
@@ -227,6 +233,7 @@ impl SettingsPage {
         match cx.app.apply_config(self.draft.clone()) {
             Ok(()) => {
                 self.notice.clear();
+                cx.toast("设置已保存");
                 true
             }
             Err(e) => {
@@ -249,10 +256,16 @@ impl Page<Kindlia> for SettingsPage {
         self.draft = cx.app.config.clone();
     }
     fn wants_backdrop(&self) -> kn_ui::Backdrop {
-        self.picker.as_ref().map(|(_,p)| p).map(|p| p.wants_backdrop()).unwrap_or(kn_ui::Backdrop::None)
+        self.picker
+            .as_ref()
+            .map(|(_, p)| p)
+            .map(|p| p.wants_backdrop())
+            .unwrap_or(kn_ui::Backdrop::None)
     }
     fn set_backdrop(&mut self, bg: Option<Bitmap>) {
-        if let Some(p) = self.picker.as_mut().map(|(_,p)| p) { p.set_backdrop(bg); }
+        if let Some(p) = self.picker.as_mut().map(|(_, p)| p) {
+            p.set_backdrop(bg);
+        }
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, frame: &mut Bitmap) {
         if let Some((_, picker)) = &mut self.picker {
@@ -363,7 +376,9 @@ impl Page<Kindlia> for SettingsPage {
                         ButtonStyle::Secondary
                     },
                 );
-                cx.hits.add(id(2), r).enabled(!matches!(field,Field::ChangeLock)||lock::pin_set(&self.draft));
+                cx.hits
+                    .add(id(2), r)
+                    .enabled(!matches!(field, Field::ChangeLock) || lock::pin_set(&self.draft));
             }
             frame.fill_rect(
                 Rect::new(side, r.bottom() - 1, cx.width - 2 * m.margin, 1),
@@ -476,7 +491,11 @@ impl Page<Kindlia> for SettingsPage {
                         let validated = if matches!(field, Field::GatewayKey) {
                             Ok(text)
                         } else if matches!(field, Field::UpdateR2) {
-                            if text.trim().is_empty(){Ok(String::new())}else{crate::update::https(&text)}
+                            if text.trim().is_empty() {
+                                Ok(String::new())
+                            } else {
+                                crate::update::https(&text)
+                            }
                         } else if matches!(field, Field::GatewayUrl) {
                             crate::gateway::Gateway::new(&text, "preview-key-123456")
                                 .map(|_| text.trim().trim_end_matches('/').to_owned())
@@ -526,7 +545,9 @@ impl Page<Kindlia> for SettingsPage {
                         match field {
                             FontSize => self.draft.font_size = value.round() as u32,
                             Line => self.draft.line_spacing = (value * 100.0).round() / 100.0,
-                            Paragraph => self.draft.paragraph_spacing = (value * 100.0).round() / 100.0,
+                            Paragraph => {
+                                self.draft.paragraph_spacing = (value * 100.0).round() / 100.0
+                            }
                             Margin => self.draft.margin = value.round() as u32,
                             Steps => self.draft.swipe_steps = value.round() as u8,
                             Refresh => self.draft.full_refresh_every = value.round() as u8,

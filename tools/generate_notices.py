@@ -7,7 +7,7 @@ metadata = json.loads((root / 'build/metadata.json').read_text(encoding='utf-8-s
 header = '''# Third-party notices
 
 Kindlia is derived from [KinNovel](https://github.com/mmnnwjw/KinNovel) at
-`3f89ad2953bfda5378d9856aea5bb4c7ebc09265`. Original code attribution and license
+`4bcfee767ba0ae3f154c189646d406951bb61f89`. Original code attribution and license
 notices are retained. Kindlia is distributed under GPL-3.0-or-later; see LICENSE.
 The original upstream notice is preserved in
 [docs/UPSTREAM-THIRD-PARTY-NOTICES.md](docs/UPSTREAM-THIRD-PARTY-NOTICES.md).
@@ -29,7 +29,10 @@ Kindlia are not implied to be distributed here.
 - Default cover: https://n-cdn.novelia.cc/static/no_cover.c90924af53e4.webp,
   bundled at the user's request as assets/no_cover.webp; artwork rights remain
   with its respective owner.
-- No additional application fonts are bundled. Fonts selected via config.toml
+- Embedded KinNovelSymbols.ttf (LXGW-derived, IPA Font License Agreement v1.0)
+  and NotoEmoji-subset.ttf (SIL Open Font License 1.1), from the recorded KinNovel
+  baseline. Full font licenses are appended to THIRD-PARTY-NOTICES.md in binary
+  packages; source texts are in rust/crates/kn-app/data/. User-selected fonts
   retain their own licenses.
 
 The AutoNovel protocol was checked against

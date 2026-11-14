@@ -55,7 +55,12 @@ pub fn spawn_on<
 ) {
     let local = spawner.clone();
     local.spawn_on(Lane::Local, true, move || {
-        let local = if url.starts_with("epub://") {
+        let local = if url == crate::covers::DEFAULT_URL {
+            Some(Ok(CachedImage {
+                bytes: include_bytes!("../../../../assets/no_cover.webp").to_vec(),
+                file: None,
+            }))
+        } else if url.starts_with("epub://") {
             Some(
                 crate::epub::image(&repo.store, &url)
                     .map(|bytes| CachedImage { bytes, file: None }),
@@ -63,6 +68,7 @@ pub fn spawn_on<
         } else {
             let file = repo.store.cache_path("images", &url).with_extension("img");
             std::fs::read(&file).ok().map(|bytes| {
+                crate::store::touch(&file);
                 Ok(CachedImage {
                     bytes,
                     file: Some(file),

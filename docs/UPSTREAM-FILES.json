@@ -29,13 +29,13 @@
     {
       "path": "THIRD-PARTY-NOTICES.md",
       "source_sha256": "d8a5941d13ef6aae4ae43c69f2d76f54c6a7ba2e097b56fcebbe776938b88339",
-      "current_sha256": "a16ab61da4e959faeab623cb8ed2756a1da7a40c9415d99b4be9f085641dab15",
+      "current_sha256": "662f407884a793129a7542e4a8cab4f1d6b85a1da7771d1ded4c7b8e5f295263",
       "modified": true
     },
     {
       "path": "config.xml",
       "source_sha256": "2d9c908152bf79a1ac52f854b8fe748be6e0bc07a8d92c6c17eaedefaef6f612",
-      "current_sha256": "b7e8c7221146e10236b9842998d1bb0a50257d2e621aa7e570e96f2e0e748718",
+      "current_sha256": "221c34de6322fd49a7db80bdb8420c419c54c1912a694da6cda9e85ce8997146",
       "modified": true
     },
     {
@@ -59,13 +59,13 @@
     {
       "path": "rust/Cargo.lock",
       "source_sha256": "4c943e88c9667d122e2788bff92c71305cd2c79cd78145e63551b117b3de31a2",
-      "current_sha256": "835299c0b7233fb278001f8ef4cfb43bc53ae2a92a1ed92ceb29199487c922ce",
+      "current_sha256": "c4c4302c76801d2f37bdeb29de7055ece1f333e7d0f88c2bf50b5626bb599920",
       "modified": true
     },
     {
       "path": "rust/Cargo.toml",
       "source_sha256": "80cf1358dfbc0ca033c0ff7465cdfc107dc5a385f56d0656c332361fee2dc047",
-      "current_sha256": "1c4f0876a51fa7eb61cc6c2101bee98a189190078b0cd8866d8222f751e7e83e",
+      "current_sha256": "4ebe200021fa8e91ae7c37d10a6fe2d7e740f4362dd0e621767be5d7992e63ba",
       "modified": true
     },
     {
@@ -93,33 +93,63 @@
       "modified": true
     },
     {
+      "path": "rust/crates/kn-app/data/KinNovelSymbols.ttf",
+      "source_sha256": "7d828634eba3c5fdff98d5240e86ccad3f4e283f94d1f708020ac6579df60298",
+      "current_sha256": "7d828634eba3c5fdff98d5240e86ccad3f4e283f94d1f708020ac6579df60298",
+      "modified": false
+    },
+    {
+      "path": "rust/crates/kn-app/data/LICENSE-LXGW",
+      "source_sha256": "86cc4e11f8e21fbdc7a08dc85cecb6ccd49e04bf8b77c8f28d2d255bb1c7e2db",
+      "current_sha256": "86cc4e11f8e21fbdc7a08dc85cecb6ccd49e04bf8b77c8f28d2d255bb1c7e2db",
+      "modified": false
+    },
+    {
+      "path": "rust/crates/kn-app/data/LICENSE-NotoEmoji",
+      "source_sha256": "500bb1ccf43df7bbb522112f9133a52b16e1c35e809632f5d8609b179152de5b",
+      "current_sha256": "500bb1ccf43df7bbb522112f9133a52b16e1c35e809632f5d8609b179152de5b",
+      "modified": false
+    },
+    {
+      "path": "rust/crates/kn-app/data/NotoEmoji-subset.ttf",
+      "source_sha256": "237cda49678bfba6d6eab169f4e8af3d3188c90ef828d752825bf14218ac68a8",
+      "current_sha256": "237cda49678bfba6d6eab169f4e8af3d3188c90ef828d752825bf14218ac68a8",
+      "modified": false
+    },
+    {
       "path": "rust/crates/kn-app/src/account.rs",
       "source_sha256": "28d40f27d372f495f6e5560cdcf6b8e4149edba99502d5a06b1457a42779cda4",
-      "current_sha256": "b4fd952942fe00c37585aefa58eda66d5b95827714c98dbda622e8aa1b8430ab",
+      "current_sha256": "2d7ca74efa2c11148da24885af106f42f31ac20eb6e61f1e062f966b31a15984",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/api.rs",
       "source_sha256": "733e19795483d298bd0235555dfb55145128d17c2854c3903e3ff133ec4e6fdd",
-      "current_sha256": "c85021f0cc33d5b6202ccafc4a7fdeb0e8af7b508efe4e3f8c107fa3a883a155",
+      "current_sha256": "0c73be195f089e1bdd1b8fb6fc92fb8029fc674b357a80a6c0145a2ab9a47a30",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/covers.rs",
       "source_sha256": "d29c17d5ff3b37fd206be4de22bf0e1925f0b061e2792c1ca47c4816c9b40b2e",
-      "current_sha256": "bc00124ffccc6b44d9ef8efd22f868ef063c76c5b69a7c0485a7a81890108b45",
+      "current_sha256": "c04e2c6d0bb79da87013c2715588896f1a3374473fa80ec415a4b016a2577b48",
+      "modified": true
+    },
+    {
+      "path": "rust/crates/kn-app/src/crash.rs",
+      "source_sha256": "34fbb603a78f56207d867939c7335c17e0a2ed37992cd2bb05e240cc04a5c9df",
+      "current_sha256": "410efc219fe379f283c7ffa2d93e111ba8fb99e9ab317e76e9f78eff8211ff42",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/main.rs",
       "source_sha256": "b72e3a3528e3ae84e54dbf89fa3ce252d08d3f187f27ee160279627c75ff9cd9",
-      "current_sha256": "0edfb8f39e728a40207832c17d9461f728b54e135ed78f02b62c51c76ee0add2",
+      "current_sha256": "2d2aafe91c807b72b2d3fca8bd05aaf773b874c69f0ade829853f5d6b832110b",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/pages/book.rs",
       "source_sha256": "bbb81c40bffed3075a303e7e88f4cb52dd33d4a828e06e1d7cf12d6fda7dc119",
-      "current_sha256": "a7f119565c7854b73397f97e31161aa90d39c60d2cbe21d45d9a8415fb48684e",
+      "current_sha256": "b256bc9738a528c44cab667a55397652906964650552213d96e611d529ddc1d1",
       "modified": true
     },
     {
@@ -155,25 +185,25 @@
     {
       "path": "rust/crates/kn-app/src/pages/me.rs",
       "source_sha256": "4e7a040e3c35090bad3a5f8b6d1d8178050364f86d7f7afe29f1292a7f3fa49e",
-      "current_sha256": "cbbddd5f02cc9642abd95f83b11d53ec57620feedc3091b1a0a434d0d7ee8b1f",
+      "current_sha256": "a1a0473abac2e44f380f2ee4ff8208f8b5896108d8734f129e2bbfbe44d01608",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/pages/mod.rs",
       "source_sha256": "50af0f889278292eaea0c2af6a8c2f59b07ee24924d05f1eb447e7dd4223479a",
-      "current_sha256": "8a20f4b02cdd587f9cd9c2386e72fc9c1ba96f475b1bc19620ba5e9743c036d9",
+      "current_sha256": "22686bda5ae770f823ba56309992c3ac617eb6003f1f3b8548b09156f960c08c",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/pages/reader.rs",
       "source_sha256": "003d29552862145619df97e6a518606c8f977e5c5094a63b843edee8672c260a",
-      "current_sha256": "4f2d6654cf07997aa0ff2a8216ddae742f33c519e99a04621e7f130278a10cad",
+      "current_sha256": "52631df1c89b22d035b1fbc42d55dfebb1ec1b945144acf18678e7ec7fec6efd",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/pages/settings.rs",
       "source_sha256": "d0bdf539f84002ed0bd337c5e2837727b0ec0e9df502248f53b2fa132c1e6460",
-      "current_sha256": "470e19ffd4f37dccaeeb58c1a732f5fa32a0ccaa3f5ee53871d30c37023ca00c",
+      "current_sha256": "aa251db6c23f01a82bd9416229a8023b9d7314041541b4468137b967a4d2631e",
       "modified": true
     },
     {
@@ -191,13 +221,19 @@
     {
       "path": "rust/crates/kn-app/src/pages/update.rs",
       "source_sha256": "3d109061f873a442bb4b3d304db2bf718a4ed59c8c38db987e2d8f04f90700d1",
-      "current_sha256": "8a45abea21f2bcc1b74680f94ca83ba4977e1ac272a5a37f1084a3ba78033318",
+      "current_sha256": "2773612eb197da554385d92c3e53bb13b8a31364b7698675df12a36b7aeee130",
       "modified": true
     },
     {
       "path": "rust/crates/kn-app/src/sleep.rs",
       "source_sha256": "e099c9d9bfa5cc14d5866b6ef016e12fc7ae00243667b6f26f22f211c8c50829",
-      "current_sha256": "38c744f21fa4f7bc90f34154614f38f4bfe4e9bcff797baf5a2d1a548201919e",
+      "current_sha256": "56493ce80a37df251a74fdfb44237e687f67834efa420c7ae3aced5094280904",
+      "modified": true
+    },
+    {
+      "path": "rust/crates/kn-app/src/splash.rs",
+      "source_sha256": "8dd2f2a116eba5fa6ae0206dea75f1c16b4213338c21bdf65ba2d3964316cd61",
+      "current_sha256": "6e7fae94eb61d056499f4659117e696197fd46cd1783ffddacb6801acc25bcd6",
       "modified": true
     },
     {
@@ -209,7 +245,7 @@
     {
       "path": "rust/crates/kn-app/src/store.rs",
       "source_sha256": "f89f2988e9a3bb7d9d5794b68938f703609cc9bd1165c188fd6f8db00ea651d7",
-      "current_sha256": "413597fb1128f88baafe3004cd749351ff29bd67fea2f302f8cf1073dd4deac5",
+      "current_sha256": "14d53fab9ba62df165add84ae52b60e945645531895a4379b6369ff1ddbf9d28",
       "modified": true
     },
     {
@@ -221,7 +257,7 @@
     {
       "path": "rust/crates/kn-app/src/update.rs",
       "source_sha256": "47cbd487b5921888273ccc8d8184f0e5b90f49c484df79a93d6b43b385d2272e",
-      "current_sha256": "cba5b90ecca5ef66ada65b225aaebbf40222e574bc500de9c8a155bf705eec93",
+      "current_sha256": "043621fcac0a1f7d0a623967e18a86bb9f64bef7b45aa81918d4d5848746c6e5",
       "modified": true
     },
     {
@@ -299,13 +335,13 @@
     {
       "path": "rust/crates/kn-net/src/http.rs",
       "source_sha256": "e1d8f1c704a64e8dd0904bd103cf11ee61bb4a89277620e0f606c6557cafb88f",
-      "current_sha256": "65d76f6a1975824430f3053c19c28fda6b438b8d82e0e957d7648eb0949186da",
+      "current_sha256": "19a117ae5f9f439e013aaf6521f93fe091a75a0c6672d6663e462fa062a7b73b",
       "modified": true
     },
     {
       "path": "rust/crates/kn-net/src/lib.rs",
       "source_sha256": "c3212d3ba7192a4adf5eba41960bc98ad2ab638c19f5261f14cc41c4bc56d9b2",
-      "current_sha256": "b4a41ab43d71ff9114adcc78f19a1cd233abcc3533138c707268ceec7477664f",
+      "current_sha256": "06cc181068ad636291a200e3e1a6e61d5a8d77865e6b570ebacba642ed18e122",
       "modified": true
     },
     {
@@ -317,8 +353,8 @@
     {
       "path": "rust/crates/kn-net/src/stream.rs",
       "source_sha256": "effa11b3e6834d5d118d14bc2f48d5a0aae0eaae548480753f4b43a658feddd3",
-      "current_sha256": "effa11b3e6834d5d118d14bc2f48d5a0aae0eaae548480753f4b43a658feddd3",
-      "modified": false
+      "current_sha256": "715ebfdb8ab527600099697694d495ed78cdf306261fb87b17db004cea2077e4",
+      "modified": true
     },
     {
       "path": "rust/crates/kn-net/src/turn.rs",
@@ -413,8 +449,8 @@
     {
       "path": "rust/crates/kn-render/Cargo.toml",
       "source_sha256": "d05710bce95aa87c0d140d7e454155298b3bad2b66b48eb5d60e1cfea9c8fb52",
-      "current_sha256": "d05710bce95aa87c0d140d7e454155298b3bad2b66b48eb5d60e1cfea9c8fb52",
-      "modified": false
+      "current_sha256": "33675191e678614452142b893b8e7b44b89cc097b43c391c8c3f027e31cd0142",
+      "modified": true
     },
     {
       "path": "rust/crates/kn-render/build.rs",
@@ -461,13 +497,13 @@
     {
       "path": "rust/crates/kn-render/src/lib.rs",
       "source_sha256": "d81f1857ce0b97e6edd149bbdf42a04a961e40bd2ef74ceaf39939ed929f80f6",
-      "current_sha256": "d81f1857ce0b97e6edd149bbdf42a04a961e40bd2ef74ceaf39939ed929f80f6",
-      "modified": false
+      "current_sha256": "870423b0a1381eb39cd8c9f1c47bc1489ae6e8f8e7afe6ba078e9aad9bb6e882",
+      "modified": true
     },
     {
       "path": "rust/crates/kn-render/src/text.rs",
       "source_sha256": "8b42f77bfea85a30db9281da8f0adab5d4c20d229962b33398f24a0390ac380a",
-      "current_sha256": "c3bacab236ac8bfef6c25faf803dca56de1c87de0e70d252d47d9eecea54e106",
+      "current_sha256": "ad763750028b45b5ff8b26f8f832a74a54ed679b10f999edccc274454055bcf6",
       "modified": true
     },
     {
@@ -611,7 +647,7 @@
     {
       "path": "rust/crates/kn-ui/src/app.rs",
       "source_sha256": "3e2dcaf9da0825dac43282aab6d893e29e972c30d6acff7b314972703a4c8f09",
-      "current_sha256": "c89eaa7c7b5553a764db7ca7fc42cd19cccc390192472507db775182458b5ed3",
+      "current_sha256": "3a2ebea3f16e5b2aa3f5007d34747c966ddf83608c3b22b80c75481b57348c70",
       "modified": true
     },
     {
@@ -665,7 +701,7 @@
     {
       "path": "tools/package_release.py",
       "source_sha256": "1b97b021b7e33c916bdff64764d740ee1756fecdc138c967f64fc25c83c44e19",
-      "current_sha256": "ecb76c8e274d989eab5693c3891e9089dabf84601f5916c459fe1ae789ac5cf7",
+      "current_sha256": "394a68493f3431782462bced8ad7b73bf0f3ed92b2d8ac9c96251b6876c82f45",
       "modified": true
     },
     {

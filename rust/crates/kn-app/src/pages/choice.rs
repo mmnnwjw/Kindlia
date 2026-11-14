@@ -48,6 +48,28 @@ impl Choice {
         }
         cx.hits.clear();
         cx.hits.add(HitId(1), frame.bounds()).no_feedback();
+        if self.options.len() == 2 && self.options.first().is_some_and(|s| s == "取消") {
+            let m = cx.app.metrics;
+            let mut ink = kn_ui::widgets::Ink {
+                fonts: cx.fonts,
+                glyphs: cx.glyphs,
+                chain: &cx.app.ui_fonts,
+            };
+            widgets::dialog(
+                &mut ink,
+                frame,
+                cx.hits,
+                &cx.theme,
+                &m,
+                &self.title,
+                &[],
+                &[
+                    (&self.options[0], HitId(710_000), ButtonStyle::Secondary),
+                    (&self.options[1], HitId(710_001), ButtonStyle::Primary),
+                ],
+            );
+            return;
+        }
         let m = cx.app.metrics;
         let rows = Self::rows(cx);
         let pages = self.options.len().div_ceil(rows).max(1);
@@ -150,7 +172,7 @@ impl Choice {
         }
     }
     pub fn input(&mut self, cx: &mut Cx<Kindlia>, event: &InputEvent) -> Event {
-        match hit(cx, event) {
+        match page_hit(cx, event) {
             Some(1) => return Event::Cancel,
             Some(2) => self.page = self.page.saturating_sub(1),
             Some(3) if self.page + 1 < self.options.len().div_ceil(Self::rows(cx)) => {

@@ -59,3 +59,44 @@ pub fn deserialize_authors<'de, D: serde::Deserializer<'de>>(
     let v = serde_json::Value::deserialize(d)?;
     Ok(authors(&serde_json::json!({"authors":v})))
 }
+
+pub fn relative_time(at: u64) -> String {
+    let age = crate::stats::unix_now().max(0) as u64;
+    let age = age.saturating_sub(at);
+    if age < 60 {
+        "刚刚".into()
+    } else if age < 3600 {
+        format!("{} 分钟前", age / 60)
+    } else if age < 86400 {
+        format!("{} 小时前", age / 3600)
+    } else {
+        format!("{} 天前", age / 86400)
+    }
+}
+
+pub fn web_badge(kind: Option<&str>, attentions: &[String]) -> String {
+    if attentions.iter().any(|s| s.eq_ignore_ascii_case("r18g")) {
+        return "R18G".into();
+    }
+    if attentions.iter().any(|s| s.eq_ignore_ascii_case("r18")) {
+        return "R18".into();
+    }
+    match kind.unwrap_or("") {
+        "连载中" | "已完结" | "短篇" => kind.unwrap().into(),
+        _ => "Web".into(),
+    }
+}
+
+/// Use only fields already returned by the list endpoint; no per-book lookup.
+pub fn book_badge(v: &serde_json::Value) -> String {
+    if !v["providerId"].is_string() {
+        return v["level"].as_str().unwrap_or("文库").into();
+    }
+    let attentions = v["attentions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a.as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    web_badge(v["type"].as_str(), &attentions)
+}

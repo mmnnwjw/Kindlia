@@ -72,8 +72,8 @@ impl HttpResponse {
     }
 }
 
-/// Minimal blocking HTTP/1.1 client: one request per connection
-/// (`Connection: close`), `Content-Length` or chunked response bodies (the
+/// Blocking HTTP/1.1 client with bounded idle connection reuse. Legacy downloads use
+/// independent connections. Supports Content-Length and chunked bodies (the
 /// server switched login/refresh to chunked in 2026-10), used for the
 /// handful of plain-REST calls api.py makes outside the SignalR hub.
 pub fn request(
@@ -85,30 +85,17 @@ pub fn request(
     timeout: Duration,
     tls: Arc<ClientConfig>,
 ) -> Result<HttpResponse, NetError> {
-    let url = ServerUrl::parse(server)?;
-    let mut stream = NetStream::connect(&url.host, url.port, url.secure, timeout, tls)?;
-    stream.set_read_timeout(Some(timeout)).ok();
-    stream.set_write_timeout(Some(timeout)).ok();
-
-    let mut request_text = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {}\r\n",
-        url.host_header()
-    );
-    for (k, v) in headers {
-        request_text.push_str(&format!("{k}: {v}\r\n"));
-    }
-    request_text.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    request_text.push_str("Connection: close\r\n\r\n");
-    stream.write_all(request_text.as_bytes())?;
-    stream.write_all(body)?;
-    stream.flush()?;
-
-    let (status, headers, body) = read_response(&mut stream, 8 * 1024 * 1024, &mut |_, _| true)?;
-    Ok(HttpResponse {
-        status,
-        body,
+    crate::pool::request(
+        server,
+        path,
+        method,
         headers,
-    })
+        body,
+        timeout,
+        tls,
+        8 * 1024 * 1024,
+        &mut |_, _| true,
+    )
 }
 
 /// 下载任意 http(s) URL 的完整内容 (字体、封面、插图)。
@@ -130,26 +117,48 @@ pub fn download_with(
     tls: Arc<ClientConfig>,
     progress: &mut dyn FnMut(usize, Option<usize>) -> bool,
 ) -> Result<Vec<u8>, NetError> {
+    download_with_headers(url, limit, timeout, tls, &[], progress)
+}
+/// Header-aware one-shot transfer. Never forward gateway credentials across origins.
+pub fn download_with_headers(
+    url: &str,
+    limit: usize,
+    timeout: Duration,
+    tls: Arc<ClientConfig>,
+    extra: &[(&str, String)],
+    progress: &mut dyn FnMut(usize, Option<usize>) -> bool,
+) -> Result<Vec<u8>, NetError> {
+    let (origin, _) = split_url(url)?;
+    if extra.iter().any(|(k, v)| {
+        !k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') || v.contains(['\r', '\n'])
+    }) {
+        return Err(NetError::protocol("无效下载请求头"));
+    }
     let mut url = url.to_string();
     for _ in 0..4 {
         let (server, path) = split_url(&url)?;
-        let parsed = ServerUrl::parse(&server)?;
-        let mut stream = NetStream::connect(
-            &parsed.host,
-            parsed.port,
-            parsed.secure,
+        let mut headers = vec![
+            ("User-Agent", "Kindlia/1.1".into()),
+            ("Accept", "*/*".into()),
+        ];
+        if server == origin {
+            headers.extend_from_slice(extra);
+        }
+        let HttpResponse {
+            status,
+            headers,
+            body,
+        } = crate::pool::request(
+            &server,
+            &path,
+            "GET",
+            &headers,
+            b"",
             timeout,
             tls.clone(),
+            limit,
+            progress,
         )?;
-        stream.set_read_timeout(Some(timeout)).ok();
-        stream.set_write_timeout(Some(timeout)).ok();
-        let request = format!(
-            "GET {path} HTTP/1.1\r\nHost: {}\r\nUser-Agent: Kindlia/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-            parsed.host_header()
-        );
-        stream.write_all(request.as_bytes())?;
-        stream.flush()?;
-        let (status, headers, body) = read_response(&mut stream, limit, progress)?;
         let header = |name: &str| {
             headers
                 .iter()
@@ -437,6 +446,7 @@ pub fn split_url(url: &str) -> Result<(String, String), NetError> {
 }
 
 /// 读响应: (状态码, 头, 正文)。正文按 chunked / Content-Length / 读到关闭 三种方式, 都受 limit 约束。
+#[cfg(test)]
 fn read_response(
     stream: &mut NetStream,
     limit: usize,

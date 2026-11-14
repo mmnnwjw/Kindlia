@@ -12,7 +12,7 @@ pub struct ManagePage {
     editor: TextEditor,
     editing: bool,
     notice: String,
-    confirm: bool,
+    confirm: Option<choice::Choice>,
     busy: bool,
     back: bool,
 }
@@ -29,7 +29,7 @@ impl ManagePage {
             title,
             editing: false,
             notice: String::new(),
-            confirm: false,
+            confirm: None,
             busy: false,
             back: false,
         }
@@ -41,7 +41,7 @@ impl ManagePage {
             editor: TextEditor::new(1000, ""),
             editing: false,
             notice: String::new(),
-            confirm: false,
+            confirm: None,
             busy: false,
             back: false,
         }
@@ -68,7 +68,22 @@ impl Page<Kindlia> for ManagePage {
     fn id(&self) -> PageId {
         PageId(52)
     }
+    fn wants_backdrop(&self) -> kn_ui::Backdrop {
+        self.confirm
+            .as_ref()
+            .map(|c| c.wants_backdrop())
+            .unwrap_or(kn_ui::Backdrop::None)
+    }
+    fn set_backdrop(&mut self, b: Option<Bitmap>) {
+        if let Some(c) = &mut self.confirm {
+            c.set_backdrop(b);
+        }
+    }
     fn render(&mut self, cx: &mut Cx<Kindlia>, f: &mut Bitmap) {
+        if let Some(c) = &mut self.confirm {
+            c.render(cx, f);
+            return;
+        }
         header(cx, f, &self.title, true);
         let m = cx.app.metrics;
         let y = m.header_h();
@@ -84,11 +99,7 @@ impl Page<Kindlia> for ManagePage {
             cx,
             f,
             Rect::new(0, (y + m.touch) as i32, cx.width, m.touch),
-            if self.confirm {
-                "确认删除"
-            } else {
-                "删除 / 移除"
-            },
+            "删除 / 移除",
             11,
             !self.busy,
         );
@@ -123,6 +134,18 @@ impl Page<Kindlia> for ManagePage {
         if matches!(e, InputEvent::Gesture(g) if g.kind == kn_platform::GestureKind::Down) {
             return Transition::None;
         }
+        if let Some(c) = &mut self.confirm {
+            match c.input(cx, e) {
+                choice::Event::Selected(1) => {
+                    self.confirm = None;
+                    self.apply(cx, true);
+                }
+                choice::Event::Selected(_) | choice::Event::Cancel => self.confirm = None,
+                _ => {}
+            }
+            cx.request_redraw(RefreshHint::Ui);
+            return Transition::None;
+        }
         if self.busy {
             return Transition::None;
         }
@@ -149,12 +172,11 @@ impl Page<Kindlia> for ManagePage {
             Some(1) => return Transition::Back,
             Some(10) => self.editing = true,
             Some(11) => {
-                if self.confirm {
-                    self.apply(cx, true)
-                } else {
-                    self.confirm = true;
-                    self.notice = "此操作修改云端数据，再点一次确认".into();
-                }
+                self.confirm = Some(choice::Choice::new(
+                    "确认删除 / 移除？将修改云端数据",
+                    ["取消", "删除"],
+                    Some(0),
+                ))
             }
             _ => {}
         }
@@ -165,7 +187,10 @@ impl Page<Kindlia> for ManagePage {
         if let Ok(r) = m.downcast::<ResultMessage>() {
             self.busy = false;
             match r.0 {
-                Ok(()) => self.back = true,
+                Ok(()) => {
+                    self.back = true;
+                    cx.toast("操作已完成");
+                }
                 Err(e) => self.notice = e,
             }
             cx.request_redraw(RefreshHint::Ui);

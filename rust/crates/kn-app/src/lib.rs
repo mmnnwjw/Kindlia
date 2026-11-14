@@ -1,29 +1,33 @@
 pub mod account;
 pub mod api;
-pub mod conversion;
-pub mod covers;
 pub mod comment_format;
+pub mod conversion;
+mod cover_cache;
+pub mod covers;
+pub mod crash;
 pub mod epub;
 pub mod fonts;
 pub mod formatting;
-pub mod images;
 pub mod gateway;
 pub mod history;
+pub mod images;
 pub mod migration;
 pub mod model;
+mod net_cache;
 pub mod pages;
 pub mod paragraphs;
 pub mod progress;
 pub mod repository;
 pub mod sleep;
+pub mod splash;
 pub mod stats;
 pub mod store;
-pub mod tz;
-pub mod update;
-pub mod update_notes;
-pub mod update_install;
 #[cfg(test)]
 mod tests;
+pub mod tz;
+pub mod update;
+pub mod update_install;
+pub mod update_notes;
 
 use kn_render::FontId;
 use kn_ui::{widgets::Metrics, App, Page, Theme};
@@ -31,6 +35,7 @@ use repository::Repository;
 use store::{Config, Store};
 
 pub struct Kindlia {
+    pub startup_notice: Option<String>,
     pub pending_update: Option<update::Release>,
     pub progress_writer: progress::Writer,
     pub config: Config,
@@ -80,6 +85,7 @@ impl Kindlia {
             offline: config.offline,
         };
         Ok(Self {
+            startup_notice: None,
             pending_update: None,
             progress_writer: progress::Writer::new()?,
             config,
@@ -122,7 +128,10 @@ impl Kindlia {
         let store = if api.base == self.repo.api.base {
             self.repo.store.clone()
         } else {
-            Store::new(self.repo.store.root.clone(), &api::normalize_base(&config.api_base_url)?)
+            Store::new(
+                self.repo.store.root.clone(),
+                &api::normalize_base(&config.api_base_url)?,
+            )
         };
         api.configure_session(
             &config.auth_base_url,
@@ -143,6 +152,25 @@ impl Kindlia {
     }
 }
 impl App for Kindlia {
+    fn startup_hold(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(2)
+    }
+    fn draw_toast(
+        &self,
+        frame: &mut kn_render::Bitmap,
+        fonts: &kn_render::FontStore,
+        glyphs: &mut kn_render::GlyphCache,
+        text: &str,
+    ) {
+        let bottom = frame.height() as i32 - self.metrics.margin as i32;
+        let mut ink = kn_ui::widgets::Ink {
+            fonts,
+            glyphs,
+            chain: &self.ui_fonts,
+        };
+        kn_ui::widgets::toast(&mut ink, frame, &self.theme(), &self.metrics, text, bottom);
+    }
+
     fn on_suspend(&mut self) {
         self.progress_writer.flush();
     }
@@ -155,20 +183,21 @@ impl App for Kindlia {
     }
     fn on_start(cx: &mut kn_ui::Cx<Self>) {
         history::start(cx);
+        sleep::restore(cx);
         update::start(cx);
         let root = cx.app.repo.store.root.clone();
         let limit = cx.app.config.cache_limit_mb;
         // 与 KN 一样独立执行维护，不能占住唯一的本地章节/字体读取队列。
-        if let Err(error) = std::thread::Builder::new().name("cache-prune".into()).spawn(move || sleep::prune(&root, limit)) {
+        if let Err(error) = std::thread::Builder::new()
+            .name("cache-prune".into())
+            .spawn(move || sleep::prune(&root, limit))
+        {
             eprintln!("[cache-prune] {error}");
         }
     }
     fn sleep_screen(&mut self) -> Option<Box<dyn Page<Self>>> {
         if self.config.sleep_cover && std::env::var("KINDLIA_SLEEP_COVER").as_deref() == Ok("1") {
-            return self
-                .sleep_image
-                .clone()
-                .map(|image| Box::new(sleep::SleepPage(image)) as Box<dyn Page<Self>>);
+            return Some(Box::new(sleep::SleepPage(self.sleep_image.clone())));
         }
         None
     }
@@ -179,8 +208,19 @@ impl App for Kindlia {
         }
     }
     fn take_transition(&mut self, _top: kn_ui::PageId) -> kn_ui::Transition<Self> {
-        if !self.lock_pending && matches!(_top.0,10|11|130) {
-            if let Some(release)=self.pending_update.take() {return kn_ui::Transition::Push(Box::new(pages::update::UpdatePage::with_release(release)));}
+        if !self.lock_pending && pages::is_root_page(_top) {
+            if let Some(text) = self.startup_notice.take() {
+                return kn_ui::Transition::Push(Box::new(pages::text::TextPage::new(
+                    "恢复提示",
+                    &text,
+                )));
+            }
+            if let Some(release) = self.pending_update.take() {
+                update::mark_prompted(&self.repo.store, &release.version);
+                return kn_ui::Transition::Push(Box::new(pages::update::UpdatePage::with_release(
+                    release,
+                )));
+            }
         }
         if self.lock_pending {
             self.lock_pending = false;

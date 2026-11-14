@@ -1,42 +1,24 @@
 use super::*;
 use crate::Kindlia;
 use kn_platform::InputEvent;
-use kn_render::{Bitmap, Point, Rect};
-use kn_ui::{
-    keyboard::{EditorEvent, TextEditor},
-    Cx, Page, PageId, RefreshHint, Transition,
-};
+use kn_render::{Bitmap, Rect};
+use kn_ui::{Cx, Page, PageId, RefreshHint, Transition};
 struct LoginResult(Result<(), String>);
+#[derive(Default)]
 pub struct MePage {
-    username: String,
-    password: TextEditor,
-    editor: TextEditor,
-    field: u8,
     busy: bool,
     notice: String,
-}
-impl Default for MePage {
-    fn default() -> Self {
-        let mut password = TextEditor::new(1200, "");
-        password.set_chinese(false);
-        password.set_masked(true);
-        let mut editor = TextEditor::new(1000, "");
-        editor.set_chinese(false);
-        Self {
-            username: String::new(),
-            password,
-            editor,
-            field: 0,
-            busy: false,
-            notice: String::new(),
-        }
-    }
+    confirm: Option<(u8, choice::Choice)>,
 }
 impl Page<Kindlia> for MePage {
     fn id(&self) -> PageId {
         PageId(130)
     }
     fn render(&mut self, cx: &mut Cx<Kindlia>, f: &mut Bitmap) {
+        if let Some((_, c)) = &mut self.confirm {
+            c.render(cx, f);
+            return;
+        }
         header(cx, f, "我的", false);
         let m = cx.app.metrics;
         let w = cx.width;
@@ -90,9 +72,17 @@ impl Page<Kindlia> for MePage {
             );
         }
         let start = y + m.row_h() + m.touch + m.margin / 2;
-        for (i, (t, id)) in [("阅读统计", 24), ("检查更新", 25), ("设置", 20), ("存储空间", 21), ("关于 Kindlia", 22), ("退出应用", 23)]
-            .iter()
-            .enumerate()
+        for (i, (t, id)) in [
+            ("阅读统计", 24),
+            ("检查更新", 25),
+            ("设置", 20),
+            ("本地书籍", 26),
+            ("存储空间", 21),
+            ("关于 Kindlia", 22),
+            ("退出应用", 23),
+        ]
+        .iter()
+        .enumerate()
         {
             row(
                 cx,
@@ -121,67 +111,76 @@ impl Page<Kindlia> for MePage {
             &status,
             true,
         );
-        if self.field != 0 {
-            let h = TextEditor::height(&m);
-            let ed = if self.field == 1 {
-                &mut self.editor
-            } else {
-                &mut self.password
-            };
-            let mut ink = kn_ui::widgets::Ink {
-                fonts: cx.fonts,
-                glyphs: cx.glyphs,
-                chain: &cx.app.ui_fonts,
-            };
-            ed.render(
-                &mut ink,
-                f,
-                cx.hits,
-                &cx.theme,
-                &m,
-                Rect::new(0, cx.height.saturating_sub(h) as i32, w, h),
-                "输入",
-                "确定",
-            );
-        } else {
-            draw_tabs(cx, f, 3);
+        draw_tabs(cx, f, 3);
+    }
+    fn wants_backdrop(&self) -> kn_ui::Backdrop {
+        self.confirm
+            .as_ref()
+            .map(|(_, c)| c.wants_backdrop())
+            .unwrap_or(kn_ui::Backdrop::None)
+    }
+    fn set_backdrop(&mut self, b: Option<Bitmap>) {
+        if let Some((_, c)) = &mut self.confirm {
+            c.set_backdrop(b);
         }
     }
     fn on_input(&mut self, cx: &mut Cx<Kindlia>, e: &InputEvent) -> Transition<Kindlia> {
-        // 按下反馈由运行时负责；等完整手势再修改页面，避免按下/抬起各整页刷新一次。
-        if matches!(e, InputEvent::Gesture(g) if g.kind == kn_platform::GestureKind::Down) {
+        if matches!(e,InputEvent::Gesture(g) if g.kind==kn_platform::GestureKind::Down) {
             return Transition::None;
         }
-        if self.field != 0 {
-            if let InputEvent::Gesture(g) = e {
-                let ed = if self.field == 1 {
-                    &mut self.editor
-                } else {
-                    &mut self.password
-                };
-                if let Some(id) = cx
-                    .hits
-                    .at(Point {
-                        x: g.end.0,
-                        y: g.end.1,
-                    })
-                    .filter(|id| ed.owns(*id))
-                {
-                    if ed.on_gesture(id, g.kind) == EditorEvent::Submit {
-                        if self.field == 1 {
-                            self.username = self.editor.text();
-                        }
-                        self.field = 0;
+
+        if let Some((action, choice)) = &mut self.confirm {
+            let action = *action;
+            match choice.input(cx, e) {
+                choice::Event::Selected(1) => {
+                    self.confirm = None;
+                    if action == 23 {
+                        return Transition::Exit;
                     }
-                    cx.request_redraw(RefreshHint::Ui);
-                    return Transition::None;
+                    let api = cx.app.repo.api.clone();
+                    self.busy = true;
+                    cx.spawn(move || LoginResult(api.logout()));
                 }
+                choice::Event::Selected(_) | choice::Event::Cancel => self.confirm = None,
+                _ => {}
             }
+            cx.request_redraw(RefreshHint::Ui);
+            return Transition::None;
         }
         if let Some(t) = tab_input(cx, e, 3) {
             return t;
         }
-        match hit(cx,e){Some(10)=>return Transition::Push(Box::new(login::LoginPage::new())),Some(11)=>return Transition::Push(Box::new(login::LoginPage::new())),Some(12)if !self.busy=>{let username=self.username.clone();let password=self.password.text();self.password.set_text("");let api=cx.app.repo.api.clone();self.busy=true;cx.spawn(move||LoginResult(api.login(&username,&password)));},Some(13)if !self.busy=>{let api=cx.app.repo.api.clone();self.busy=true;cx.spawn(move||LoginResult(api.logout()));},Some(20)=>return Transition::Push(Box::new(settings::SettingsPage::new(cx.app))),Some(21)=>return Transition::Push(Box::new(storage::StoragePage::default())),Some(22)=>return Transition::Push(Box::new(text::TextPage::new("关于 Kindlia",concat!("Kindlia ",env!("CARGO_PKG_VERSION"),"\nAutoNovel 原生 Kindle 客户端\n账号注册、找回密码请使用 auth.novelia.cc\n自定义字体放入 /mnt/us/extensions/kindlia/fonts\nGPL-3.0-or-later\n基于 KinNovel，保留原作者许可。")))),Some(25)=>return Transition::Push(Box::new(update::UpdatePage::default())),Some(24)=>return Transition::Push(Box::new(stats::StatsPage::default())),Some(23)=>return Transition::Exit,_=>{}}
+        match hit(cx, e) {
+            Some(10) => return Transition::Push(Box::new(login::LoginPage::new())),
+            Some(13) if !self.busy => {
+                self.confirm = Some((
+                    13,
+                    choice::Choice::new("退出当前账号？", ["取消", "退出登录"], Some(0)),
+                ))
+            }
+            Some(23) => {
+                self.confirm = Some((
+                    23,
+                    choice::Choice::new("退出 Kindlia？", ["取消", "退出应用"], Some(0)),
+                ))
+            }
+            Some(20) => return Transition::Push(Box::new(settings::SettingsPage::new(cx.app))),
+            Some(21) => return Transition::Push(Box::new(storage::StoragePage::default())),
+            Some(22) => {
+                return Transition::Push(Box::new(text::TextPage::new(
+                    "关于 Kindlia",
+                    concat!(
+                        "Kindlia ",
+                        env!("CARGO_PKG_VERSION"),
+                        "\nAutoNovel 原生 Kindle 客户端\n基于 KinNovel，GPL-3.0-or-later"
+                    ),
+                )))
+            }
+            Some(24) => return Transition::Push(Box::new(stats::StatsPage::default())),
+            Some(25) => return Transition::Push(Box::new(update::UpdatePage::default())),
+            Some(26) => return Transition::Push(Box::new(library::LibraryPage::local_books())),
+            _ => {}
+        }
         cx.request_redraw(RefreshHint::Ui);
         Transition::None
     }
@@ -189,7 +188,10 @@ impl Page<Kindlia> for MePage {
         if let Ok(r) = m.downcast::<LoginResult>() {
             self.busy = false;
             self.notice = match r.0 {
-                Ok(()) => "账号状态已更新".into(),
+                Ok(()) => {
+                    cx.toast("账号状态已更新");
+                    String::new()
+                }
                 Err(e) => e,
             };
             cx.request_redraw(RefreshHint::Ui);

@@ -9,6 +9,7 @@ use kn_render::{FontId, FontStore};
 use std::{path::Path, time::Duration};
 
 fn load_fonts(fonts: &mut FontStore, config: &Config, root: &Path) -> Result<Vec<FontId>, String> {
+    let started = std::time::Instant::now();
     let mut paths: Vec<std::path::PathBuf> = config
         .font_paths
         .iter()
@@ -37,8 +38,12 @@ fn load_fonts(fonts: &mut FontStore, config: &Config, root: &Path) -> Result<Vec
         .map(std::path::PathBuf::from),
     );
     let mut chain = vec![];
+    let mut seen = std::collections::HashSet::new();
     for path in paths {
         if !path.exists() {
+            continue;
+        }
+        if !seen.insert(path.canonicalize().unwrap_or_else(|_| path.clone())) {
             continue;
         }
         match fonts.load_file(&path) {
@@ -46,14 +51,36 @@ fn load_fonts(fonts: &mut FontStore, config: &Config, root: &Path) -> Result<Vec
             Err(e) => eprintln!("[font] {}: {e}", path.display()),
         }
     }
-    if chain.is_empty() {
+    let primary_available = !chain.is_empty();
+    // Keep the source project's compact symbols/emoji fallback at the end of every UI/reader chain.
+    for bytes in [
+        include_bytes!("../data/KinNovelSymbols.ttf").as_slice(),
+        include_bytes!("../data/NotoEmoji-subset.ttf").as_slice(),
+    ] {
+        chain.push(
+            fonts
+                .load_static(bytes)
+                .map_err(|e| format!("内置字体加载失败: {e}"))?,
+        );
+    }
+    if !primary_available {
         return Err("找不到字体，请在 config.toml 的 font_paths 中配置中日文字体".into());
     }
     // 回退链能否覆盖常用假名明确记录；不假设系统中文字体一定覆盖日文。
     for ch in ['あ', 'ア', '漢'] {
         let supported = chain.iter().any(|font| fonts.has_char(*font, ch));
-        eprintln!("[font] {ch}: supported={supported}；完整日文覆盖仍需实机确认");
+        if !supported {
+            eprintln!("[font] 缺少基础字形: {ch}");
+        } else if std::env::var_os("KN_DEBUG").is_some() {
+            eprintln!("[font] {ch}: supported=true");
+        }
     }
+    let (heap, backed) = fonts.backing_bytes();
+    eprintln!(
+        "[font] loaded={} heap_bytes={heap} file_or_static_bytes={backed} elapsed_ms={:.1}",
+        chain.len(),
+        started.elapsed().as_secs_f64() * 1000.
+    );
     Ok(chain)
 }
 
@@ -186,9 +213,27 @@ fn device(root: std::path::PathBuf, config: Config) -> Result<(), String> {
         display.assume_fb_upside_down(upside_down);
         display.set_rotation(kn_platform::Rotation::new(if upside_down { 2 } else { 0 }));
     }
+    kindlia_app::crash::install(&root);
+    let crash_notice = kindlia_app::crash::take_notice(&root);
+    let mut splash = kindlia_app::splash::render(info.width, info.height);
+    if config.night {
+        splash.invert_rect(splash.bounds());
+    }
+    display.set_night(config.night);
+    if let Err(e) = display.present(
+        &splash,
+        &kn_platform::RefreshRequest {
+            rect: splash.bounds(),
+            waveform: kn_platform::Waveform::Gc16,
+            flash: true,
+            swipe: None,
+        },
+    ) {
+        eprintln!("[splash] {e}");
+    }
     let mut fonts = FontStore::new();
     let chain = load_fonts(&mut fonts, &config, &root)?;
-    let app = Kindlia::new(
+    let mut app = Kindlia::new(
         root,
         config,
         chain,
@@ -197,6 +242,7 @@ fn device(root: std::path::PathBuf, config: Config) -> Result<(), String> {
         info.dpi,
         kn_platform::Frontlight::detect(info.caps),
     )?;
+    app.startup_notice = crash_notice;
     let mut input =
         InputReader::open(&info, GestureConfig::default()).map_err(|e| e.to_string())?;
     if upside_down {
@@ -251,7 +297,9 @@ fn run() -> Result<(), String> {
     }
     let root = store::root_dir();
     kindlia_app::update_install::recover_install(&root);
-    if args.iter().any(|s|s=="--recover-update") { return Ok(()); }
+    if args.iter().any(|s| s == "--recover-update") {
+        return Ok(());
+    }
     kindlia_app::migration::device(&root)?;
     if args.iter().any(|s| s == "--migrate-data") {
         println!("Kindlia data migration complete");

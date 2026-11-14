@@ -73,9 +73,26 @@ pub struct TextStyle<'a> {
     pub size_px: f32,
 }
 
+enum FontData {
+    Owned(Vec<u8>),
+    Static(&'static [u8]),
+    #[cfg(target_os = "linux")]
+    Mapped(crate::mapped_font::MappedFont),
+}
+impl std::ops::Deref for FontData {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Owned(b) => b,
+            Self::Static(b) => b,
+            #[cfg(target_os = "linux")]
+            Self::Mapped(b) => b.bytes(),
+        }
+    }
+}
 struct LoadedFont {
     /// 空 = 已卸载 (FontId 不复用, 避免缓存串号)
-    data: Vec<u8>,
+    data: FontData,
 }
 
 impl LoadedFont {
@@ -104,6 +121,10 @@ impl FontStore {
     /// 从文件加载 TTF/OTF/TTC/WOFF2 (TTC 取第一个字体, WOFF2 按文件头 `wOF2` 判断)。WOFF2 解码后的 TTF 字节可由调用方缓存,
     /// 见 `decode_woff2`。
     pub fn load_file(&mut self, path: &Path) -> Result<FontId, TextError> {
+        #[cfg(target_os = "linux")]
+        if let Ok(mapped) = crate::mapped_font::MappedFont::open(path) {
+            return self.load_data(FontData::Mapped(mapped));
+        }
         let bytes = std::fs::read(path)?;
         self.load_bytes(bytes)
     }
@@ -116,9 +137,17 @@ impl FontStore {
             bytes
         };
         // Validate it parses before storing; FontRef borrows, so just check and drop.
-        FontRef::from_index(&ttf_bytes, 0).map_err(|e| TextError::BadFont(format!("{e:?}")))?;
+        self.load_data(FontData::Owned(ttf_bytes))
+    }
+
+    pub fn load_static(&mut self, bytes: &'static [u8]) -> Result<FontId, TextError> {
+        self.load_data(FontData::Static(bytes))
+    }
+
+    fn load_data(&mut self, data: FontData) -> Result<FontId, TextError> {
+        FontRef::from_index(&data, 0).map_err(|e| TextError::BadFont(format!("{e:?}")))?;
         let id = FontId(self.fonts.len() as u32);
-        self.fonts.push(LoadedFont { data: ttf_bytes });
+        self.fonts.push(LoadedFont { data });
         Ok(id)
     }
 
@@ -149,19 +178,34 @@ impl FontStore {
         if ch.is_whitespace() {
             return true;
         }
-        self.font_ref(font).charmap().map(ch).is_some_and(|id| id != GlyphId::new(0))
+        self.font_ref(font)
+            .charmap()
+            .map(ch)
+            .is_some_and(|id| id != GlyphId::new(0))
     }
 
     /// 释放字体数据 (章节字体解码后有几 MB, 换章时卸载旧的)。之后该 FontId 不能再用于绘制;
     /// 调用方应同时 `GlyphCache::forget_font`。
     pub fn unload(&mut self, font: FontId) {
         if let Some(f) = self.fonts.get_mut(font.0 as usize) {
-            f.data = Vec::new();
+            f.data = FontData::Owned(Vec::new());
         }
     }
 
     pub fn is_loaded(&self, font: FontId) -> bool {
-        self.fonts.get(font.0 as usize).is_some_and(|f| !f.data.is_empty())
+        self.fonts
+            .get(font.0 as usize)
+            .is_some_and(|f| !f.data.is_empty())
+    }
+
+    /// Heap bytes versus file/static-backed bytes (not a resident-memory measurement).
+    pub fn backing_bytes(&self) -> (usize, usize) {
+        self.fonts
+            .iter()
+            .fold((0, 0), |(owned, backed), f| match &f.data {
+                FontData::Owned(b) => (owned + b.len(), backed),
+                _ => (owned, backed + f.data.len()),
+            })
     }
 
     /// 字体链中负责该字符的字体 (见模块文档)。
@@ -217,7 +261,9 @@ impl FontStore {
         for (i, ch) in text.char_indices() {
             let end = i + ch.len_utf8();
             let ch = inline_char(ch);
-            total += *memo.entry(ch).or_insert_with(|| self.advance(self.pick_font(&style.fonts, ch), ch, style.size_px));
+            total += *memo.entry(ch).or_insert_with(|| {
+                self.advance(self.pick_font(&style.fonts, ch), ch, style.size_px)
+            });
             prefixes.push((end, total));
         }
         if total <= max_width {
@@ -266,7 +312,8 @@ fn inline_char(ch: char) -> char {
 }
 
 pub fn is_invisible(ch: char) -> bool {
-    ch.is_control() || matches!(ch, '\u{00AD}' | '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0020}'..='\u{E007F}' | '\u{1F3FB}'..='\u{1F3FF}' | '\u{20E3}')
+    ch.is_control()
+        || matches!(ch, '\u{00AD}' | '\u{200B}'..='\u{200D}' | '\u{2060}' | '\u{FEFF}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0020}'..='\u{E007F}' | '\u{1F3FB}'..='\u{1F3FF}' | '\u{20E3}')
 }
 
 pub fn decode_woff2(bytes: &[u8]) -> Result<Vec<u8>, TextError> {
@@ -418,14 +465,23 @@ impl GlyphCache {
         id
     }
 
-    fn rasterize(fonts: &FontStore, font_id: FontId, gid: GlyphId, size_px: f32, italic: bool) -> GlyphEntry {
+    fn rasterize(
+        fonts: &FontStore,
+        font_id: FontId,
+        gid: GlyphId,
+        size_px: f32,
+        italic: bool,
+    ) -> GlyphEntry {
         let font_ref = fonts.font_ref(font_id);
         let metrics = font_ref.glyph_metrics(Size::new(size_px), LocationRef::default());
         let advance = metrics.advance_width(gid).unwrap_or(size_px);
 
         let outlines = font_ref.outline_glyphs();
         if let Some(outline) = outlines.get(gid) {
-            let mut pen = PenCollector { cmds: Vec::new(), skew: if italic { ITALIC_SKEW } else { 0.0 } };
+            let mut pen = PenCollector {
+                cmds: Vec::new(),
+                skew: if italic { ITALIC_SKEW } else { 0.0 },
+            };
             let settings = DrawSettings::unhinted(Size::new(size_px), LocationRef::default());
             if outline.draw(settings, &mut pen).is_ok() && !pen.cmds.is_empty() {
                 let (pixels, placement) = Mask::new(&pen.cmds).style(Fill::NonZero).render();
@@ -459,13 +515,15 @@ impl GlyphCache {
             return;
         }
         let goal = self.max_bytes / 4 * 3;
-        let mut ages: Vec<(u64, (FontId, u32, u32))> = self.map.iter().map(|(k, e)| (e.last_used, *k)).collect();
+        let mut ages: Vec<(u64, (FontId, u32, u32))> =
+            self.map.iter().map(|(k, e)| (e.last_used, *k)).collect();
         let mut start = 0;
         while self.bytes_used > goal && start < ages.len() {
             // 按字节比例估计要淘汰几个, 字形大小不一时不够就再来一轮
             let rest = &mut ages[start..];
             let excess = (self.bytes_used - goal) as u64;
-            let k = ((rest.len() as u64 * excess).div_ceil(self.bytes_used.max(1) as u64) as usize).clamp(1, rest.len());
+            let k = ((rest.len() as u64 * excess).div_ceil(self.bytes_used.max(1) as u64) as usize)
+                .clamp(1, rest.len());
             if k < rest.len() {
                 rest.select_nth_unstable(k);
             }
@@ -481,7 +539,11 @@ impl GlyphCache {
 
     /// 命中统计与当前占用。
     pub fn stats(&self) -> GlyphStats {
-        GlyphStats { entries: self.map.len(), bytes: self.bytes_used, ..self.stats }
+        GlyphStats {
+            entries: self.map.len(),
+            bytes: self.bytes_used,
+            ..self.stats
+        }
     }
 
     /// 在 (x, baseline_y) 处按样式绘制文字, 颜色 `color`; 返回绘制宽度 (像素)。
@@ -496,7 +558,16 @@ impl GlyphCache {
         style: &TextStyle,
         color: u8,
     ) -> f32 {
-        self.draw_text_synth(fonts, target, x, baseline_y, text, style, color, Synth::default())
+        self.draw_text_synth(
+            fonts,
+            target,
+            x,
+            baseline_y,
+            text,
+            style,
+            color,
+            Synth::default(),
+        )
     }
 
     /// 同 [`Self::draw_text`], 可合成粗体/斜体 (advance 不变)。
@@ -517,7 +588,11 @@ impl GlyphCache {
         }
         // 斜体字形单独缓存 (最高位做标记)
         let size_key = quantize_size(style.size_px) | if synth.italic { 1 << 31 } else { 0 };
-        let strokes = if synth.bold { bold_strokes(style.size_px) } else { 0 };
+        let strokes = if synth.bold {
+            bold_strokes(style.size_px)
+        } else {
+            0
+        };
         let base_y = baseline_y.round() as i32;
         let start_x_64 = (x as f64 * 64.0).round() as i64;
         let mut pen_x_64 = start_x_64;
@@ -563,7 +638,14 @@ impl GlyphCache {
                 let origin_x = px.round() as i32 + entry.left;
                 let origin_y = base_y + entry.top;
                 for dx in 0..=strokes {
-                    target.blend_mask(&entry.pixels, entry.width, entry.height, origin_x + dx, origin_y, color);
+                    target.blend_mask(
+                        &entry.pixels,
+                        entry.width,
+                        entry.height,
+                        origin_x + dx,
+                        origin_y,
+                        color,
+                    );
                 }
             }
             pen_x_64 += (entry.advance as f64 * 64.0).round() as i64;
@@ -592,7 +674,8 @@ impl GlyphCache {
             }
             keep
         });
-        self.chars.retain(|k, v| v.0 != font && !dead.contains(&k.0));
+        self.chars
+            .retain(|k, v| v.0 != font && !dead.contains(&k.0));
     }
 
     pub fn clear(&mut self) {
@@ -613,7 +696,14 @@ mod tests {
 
     #[test]
     fn emoji_joiners_and_modifiers_are_invisible() {
-        for ch in ['\u{200D}', '\u{FE0F}', '\u{FE0E}', '\u{1F3FD}', '\u{E0067}', '\u{20E3}'] {
+        for ch in [
+            '\u{200D}',
+            '\u{FE0F}',
+            '\u{FE0E}',
+            '\u{1F3FD}',
+            '\u{E0067}',
+            '\u{20E3}',
+        ] {
             assert!(is_invisible(ch), "{:X}", ch as u32);
         }
         for ch in ['a', '中', '\u{1F44D}', '\u{2764}', ' '] {

@@ -24,8 +24,8 @@ Kindlia are not implied to be distributed here.
 - Default cover: https://n-cdn.novelia.cc/static/no_cover.c90924af53e4.webp,
   bundled at the user's request as assets/no_cover.webp; artwork rights remain
   with its respective owner.
-- No additional application fonts are bundled. Fonts selected via config.toml
-  retain their own licenses.
+- Application symbols and emoji fonts are embedded; see the font notices below.
+  User-selected fonts retain their own licenses.
 
 The AutoNovel protocol was checked against
 https://github.com/auto-novel/auto-novel at
@@ -218,3 +218,7 @@ carry their complete license texts.
 | zip | 0.6.6 | MIT |
 | zlib-rs | 0.6.8 | Zlib |
 | zmij | 1.0.23 | MIT |
+
+## Embedded symbols and emoji fonts
+
+The binary embeds KinNovelSymbols.ttf (LXGW-derived, IPA Font License Agreement v1.0) and NotoEmoji-subset.ttf (Noto Emoji, SIL Open Font License 1.1), taken from the recorded KinNovel v1.6.8 baseline. Full font license texts are appended to this file in binary packages; source copies are in rust/crates/kn-app/data/.

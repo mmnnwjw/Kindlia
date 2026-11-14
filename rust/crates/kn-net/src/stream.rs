@@ -131,6 +131,9 @@ impl NetStream {
             )
         })?;
         tcp.set_nodelay(true).ok();
+        // Bound TLS handshake writes as well as later request/response I/O.
+        tcp.set_read_timeout(Some(connect_timeout)).ok();
+        tcp.set_write_timeout(Some(connect_timeout)).ok();
         if !secure {
             return Ok(NetStream::Plain(tcp));
         }

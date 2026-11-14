@@ -40,5 +40,12 @@ with zipfile.ZipFile(args.output, 'w', zipfile.ZIP_DEFLATED) as out:
         (root / 'rust/third_party/libwebp/COPYING', 'kindlia/licenses/libwebp-COPYING'),
         (root / 'rust/third_party/libwebp/PATENTS', 'kindlia/licenses/libwebp-PATENTS'),
     ]:
-        out.write(source, target)
+        if target == 'kindlia/THIRD-PARTY-NOTICES.md':
+            # Keep the established file allowlist compatible with installed v1.1.0 updaters.
+            text = source.read_bytes()
+            for name in ('LICENSE-LXGW', 'LICENSE-NotoEmoji'):
+                text += ('\n\n# ' + name + '\n\n').encode() + (root / 'rust/crates/kn-app/data' / name).read_bytes()
+            out.writestr(target, text)
+        else:
+            out.write(source, target)
 print(args.output.resolve())

@@ -250,7 +250,11 @@ pub fn download(
             let started = std::time::Instant::now();
             let mut callback = |n, t| {
                 progress(n, t);
-                started.elapsed() < Duration::from_secs(240)
+                let elapsed = started.elapsed();
+                elapsed < Duration::from_secs(240)
+                    && !(elapsed >= Duration::from_secs(12)
+                        && n as f64 / elapsed.as_secs_f64() < 12. * 1024.
+                        && t.is_none_or(|total| n < total))
             };
             let package_url = format!("{url}?sha256={}", release.sha256);
             let bytes = http::download_with(
@@ -295,6 +299,14 @@ fn save_state(store: &Store, checked: i64, prompted: Value) {
         true,
     );
 }
+pub fn mark_prompted(store: &Store, version: &str) {
+    let current = state(store);
+    save_state(
+        store,
+        current["checked"].as_i64().unwrap_or(0),
+        json!(version),
+    );
+}
 pub fn start(cx: &kn_ui::Cx<Kindlia>) {
     if !cx.app.config.update_auto || cx.app.repo.offline {
         return;
@@ -304,7 +316,7 @@ pub fn start(cx: &kn_ui::Cx<Kindlia>) {
     if crate::stats::unix_now() - state["checked"].as_i64().unwrap_or(0) < 86400 {
         return;
     }
-    save_state(&store, crate::stats::unix_now(), state["prompted"].clone());
+
     let config = cx.app.config.clone();
     let poster = cx.app_poster();
     cx.spawn_local_droppable(move || {
@@ -314,10 +326,10 @@ pub fn start(cx: &kn_ui::Cx<Kindlia>) {
             .name("kindlia-update-check".into())
             .spawn(move || {
                 if let Ok(release) = check(&config, &store) {
+                    save_state(&store, crate::stats::unix_now(), state["prompted"].clone());
                     if newer(&release.version)
                         && state["prompted"].as_str() != Some(&release.version)
                     {
-                        save_state(&store, crate::stats::unix_now(), json!(release.version));
                         poster.post(kn_ui::Delivery::App(Box::new(move |app: &mut Kindlia| {
                             app.pending_update = Some(release)
                         })));

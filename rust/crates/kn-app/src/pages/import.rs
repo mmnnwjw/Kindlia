@@ -94,7 +94,7 @@ impl Page<Kindlia> for ImportPage {
         if self.busy {
             return Transition::None;
         }
-        match hit(cx, e) {
+        match page_hit(cx, e) {
             Some(1) => return Transition::Back,
             Some(2) => self.page = self.page.saturating_sub(1),
             Some(3) if self.page + 1 < self.files.len().div_ceil(self.rows) => self.page += 1,

@@ -53,7 +53,23 @@ impl crate::api::ApiClient {
         self.persist_session(&s)
     }
     pub fn refresh(&self) -> Result<(), String> {
-        let snapshot = self.session.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.refresh_after(None)
+    }
+    pub(crate) fn refresh_after(&self, failed_token: Option<&str>) -> Result<(), String> {
+        // Serialize refresh-cookie use, then recheck the token that actually failed.
+        let _refresh = self.refresh_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let snapshot = self
+            .session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if failed_token.is_some_and(|token| snapshot.token != token) {
+            return if snapshot.token.is_empty() {
+                Err("登录已失效，请重新登录".into())
+            } else {
+                Ok(())
+            };
+        }
         if snapshot.cookie.is_empty() {
             return Err("登录过期，请重新登录".into());
         }
@@ -81,6 +97,16 @@ impl crate::api::ApiClient {
             .map_err(|e| e.to_string())?
             .trim()
             .to_owned();
+        if let Some(cookie) = r
+            .headers
+            .iter()
+            .find(|(k, v)| k.eq_ignore_ascii_case("set-cookie") && v.starts_with("refresh-token="))
+        {
+            s.cookie = cookie.1.split(';').next().unwrap_or("").to_owned();
+        }
+        if s.token.is_empty() {
+            return Err("刷新未返回令牌".into());
+        }
         self.persist_session(&s)
     }
     pub fn logout(&self) -> Result<(), String> {
@@ -88,7 +114,10 @@ impl crate::api::ApiClient {
         let snapshot = {
             let mut s = self.session.lock().unwrap_or_else(|e| e.into_inner());
             let old = s.clone();
-            *s = Session { revision: s.revision.wrapping_add(1), ..Session::default() };
+            *s = Session {
+                revision: s.revision.wrapping_add(1),
+                ..Session::default()
+            };
             self.persist_session(&s)?;
             old
         };
