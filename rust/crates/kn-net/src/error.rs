@@ -64,6 +64,9 @@ impl NetError {
 
 impl From<std::io::Error> for NetError {
     fn from(err: std::io::Error) -> Self {
-        NetError::Network(err.to_string())
+        match err.kind() {
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => NetError::Timeout,
+            _ => NetError::Network(err.to_string()),
+        }
     }
 }

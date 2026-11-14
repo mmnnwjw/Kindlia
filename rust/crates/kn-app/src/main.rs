@@ -215,22 +215,6 @@ fn device(root: std::path::PathBuf, config: Config) -> Result<(), String> {
     }
     kindlia_app::crash::install(&root);
     let crash_notice = kindlia_app::crash::take_notice(&root);
-    let mut splash = kindlia_app::splash::render(info.width, info.height);
-    if config.night {
-        splash.invert_rect(splash.bounds());
-    }
-    display.set_night(config.night);
-    if let Err(e) = display.present(
-        &splash,
-        &kn_platform::RefreshRequest {
-            rect: splash.bounds(),
-            waveform: kn_platform::Waveform::Gc16,
-            flash: true,
-            swipe: None,
-        },
-    ) {
-        eprintln!("[splash] {e}");
-    }
     let mut fonts = FontStore::new();
     let chain = load_fonts(&mut fonts, &config, &root)?;
     let mut app = Kindlia::new(

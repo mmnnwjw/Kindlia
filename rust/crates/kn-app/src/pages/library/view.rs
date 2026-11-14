@@ -6,6 +6,26 @@ impl LibraryPage {
             picker.render(cx, frame);
             return;
         }
+        if self.renaming_folder {
+            header(cx, frame, "重命名收藏夹", true);
+            let m = cx.app.metrics;
+            button(
+                cx,
+                frame,
+                Rect::new(
+                    m.margin as i32,
+                    m.header_h() as i32,
+                    cx.width - 2 * m.margin,
+                    m.touch,
+                ),
+                "取消",
+                25,
+                true,
+            );
+            self.render_editor(cx, frame);
+            tips::show(cx, frame, &tips::KEYBOARD, true);
+            return;
+        }
         if self.discover && self.searching {
             header(cx, frame, "搜索Web小说", true);
         } else if self.discover {
@@ -224,37 +244,37 @@ impl LibraryPage {
         } else {
             self.shelf.is_empty()
         };
-        // 常态不保留空白提示行；错误/查询信息在列表底部显示。
-        if !empty
-            && !self.notice.is_empty()
-            && self.notice != "我的收藏"
-            && !self.loading
-            && !show_folders
-        {
+        let bottom = if self.local || self.return_on_close {
+            0
+        } else {
+            m.tab_bar_h()
+        };
+        // Reserve space for persistent errors even when a folder list already has items.
+        let notice_h =
+            if !empty && !self.notice.is_empty() && self.notice != "我的收藏" && !self.loading {
+                m.touch / 2
+            } else {
+                0
+            };
+        if notice_h > 0 {
             label(
                 cx,
                 frame,
                 Rect::new(
                     0,
-                    cx.height
-                        .saturating_sub(m.tab_bar_h() + m.pager_h() + m.touch / 2)
-                        as i32,
+                    cx.height.saturating_sub(bottom + m.pager_h() + notice_h) as i32,
                     width,
-                    m.touch / 2,
+                    notice_h,
                 ),
                 &self.notice,
                 true,
             );
         }
         if !self.discover {
-            self.rows = (cx.height.saturating_sub(
-                top + m.pager_h()
-                    + if self.local || self.return_on_close {
-                        0
-                    } else {
-                        m.tab_bar_h()
-                    },
-            ) / folder_h)
+            self.rows = (cx
+                .height
+                .saturating_sub(top + m.pager_h() + bottom + notice_h)
+                / folder_h)
                 .max(1) as usize;
             self.pages = if show_folders {
                 self.folders.len()
@@ -430,29 +450,38 @@ impl LibraryPage {
                 );
             }
         } else {
-            let h = TextEditor::height(&m);
-            let mut ink = Ink {
-                fonts: cx.fonts,
-                glyphs: cx.glyphs,
-                chain: &cx.app.ui_fonts,
-            };
-            self.editor.render(
-                &mut ink,
-                frame,
-                cx.hits,
-                &cx.theme,
-                &m,
-                Rect::new(0, cx.height.saturating_sub(h) as i32, width, h),
-                if self.renaming_folder {
-                    "收藏夹名称"
-                } else {
-                    "小说关键词"
-                },
-                if self.renaming_folder { "保存" } else { "搜索" },
-            );
+            self.render_editor(cx, frame);
         }
         if let Some((tip, when)) = self.active_tip() {
             super::tips::show(cx, frame, tip, when);
         }
+    }
+
+    fn render_editor(&mut self, cx: &mut Cx<Kindlia>, frame: &mut Bitmap) {
+        let m = cx.app.metrics;
+        let h = TextEditor::height(&m);
+        let mut ink = Ink {
+            fonts: cx.fonts,
+            glyphs: cx.glyphs,
+            chain: &cx.app.ui_fonts,
+        };
+        self.editor.render(
+            &mut ink,
+            frame,
+            cx.hits,
+            &cx.theme,
+            &m,
+            Rect::new(0, cx.height.saturating_sub(h) as i32, cx.width, h),
+            if self.renaming_folder {
+                "收藏夹名称"
+            } else {
+                "小说关键词"
+            },
+            if self.renaming_folder {
+                "保存"
+            } else {
+                "搜索"
+            },
+        );
     }
 }

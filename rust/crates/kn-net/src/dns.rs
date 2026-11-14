@@ -52,7 +52,11 @@ pub fn resolve(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
         }
     }
     match lookup(host, port) {
-        Ok(addrs) => {
+        Ok(mut addrs) => {
+            // Kindle Wi-Fi can advertise IPv6 while its route stalls TLS/body transfers.
+            // Prefer IPv4 on fresh resolution; retain IPv6 as a fallback and keep the
+            // successful-response ordering for later requests.
+            addrs.sort_by_key(|addr| addr.is_ipv6());
             let ips: Vec<IpAddr> = addrs.iter().map(|a| a.ip()).collect();
             let mut cache = cache();
             cache.retain(|(h, _, _)| h != host);
@@ -67,6 +71,25 @@ pub fn resolve(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
 /// Drop the cached answer for `host` (none of its addresses accepted a connection).
 pub fn forget(host: &str) {
     cache().retain(|(h, _, _)| h != host);
+}
+
+/// Keep all DNS answers, but try a failed edge last on the next connection.
+pub(crate) fn failed(host: &str, ip: IpAddr) {
+    if let Some((_, _, ips)) = cache().iter_mut().find(|(h, _, _)| h == host) {
+        if let Some(i) = ips.iter().position(|a| *a == ip) {
+            let ip = ips.remove(i);
+            ips.push(ip);
+        }
+    }
+}
+
+pub(crate) fn succeeded(host: &str, ip: IpAddr) {
+    if let Some((_, _, ips)) = cache().iter_mut().find(|(h, _, _)| h == host) {
+        if let Some(i) = ips.iter().position(|a| *a == ip) {
+            let ip = ips.remove(i);
+            ips.insert(0, ip);
+        }
+    }
 }
 
 fn cache() -> std::sync::MutexGuard<'static, Vec<(String, Instant, Vec<IpAddr>)>> {

@@ -9,8 +9,8 @@
 ```powershell
 ./rust/build.ps1 kindle
 python tools/package_release.py
-python tools/sign_update.py dist/kindlia-1.1.1.zip
-python tools/prepare_r2.py --package dist/kindlia-1.1.1.zip
+python tools/sign_update.py dist/kindlia-1.2.0.zip
+python tools/prepare_r2.py --package dist/kindlia-1.2.0.zip
 ```
 
 签名私钥只存本机 `~/.kinovel-secrets/KINDLIA_UPDATE_SIGNING_KEY`，也可用 `--key` 指定。它与 KinNovel 的密钥独立，不要上传或公开；构建包不含私钥。签名工具依赖 PyNaCl。换电脑发布时需要安全迁移此密钥，不能任意换钥，否则既有客户端无法验证更新。
@@ -22,7 +22,7 @@ python tools/prepare_r2.py --package dist/kindlia-1.1.1.zip
 发布 GitHub Release 并上传 ZIP、签名后运行：
 
 ```powershell
-python tools/r2_publish.py v1.1.1 --zip dist/kindlia-1.1.1.zip --local-secrets
+python tools/r2_publish.py v1.2.0 --zip dist/kindlia-1.2.0.zip --local-secrets
 ```
 
 固定目标桶为 `kindlia-updates`，不会上传到 KinNovel 的桶。凭据读取 `~/.kinovel-secrets/{S3_API,Access_Key_ID,Secret_Access_Key,GithubToken}`，不打印；先核对 GitHub 资产的大小、SHA256 和签名，再上传包与签名，最后上传清单，并经公开域名回读核验。无需提供列举所有桶的权限。
@@ -35,15 +35,15 @@ python tools/r2_publish.py v1.1.1 --zip dist/kindlia-1.1.1.zip --local-secrets
 ```text
 桶根目录/
 ├── releases.json
-├── kindlia-1.1.1.zip
-└── kindlia-1.1.1.zip.sig
+├── kindlia-1.2.0.zip
+└── kindlia-1.2.0.zip.sig
 ```
 
 对应公开地址：
 
 - `https://update1.mmnnwjw.dpdns.org/releases.json`
-- `https://update1.mmnnwjw.dpdns.org/kindlia-1.1.1.zip`
-- `https://update1.mmnnwjw.dpdns.org/kindlia-1.1.1.zip.sig`
+- `https://update1.mmnnwjw.dpdns.org/kindlia-1.2.0.zip`
+- `https://update1.mmnnwjw.dpdns.org/kindlia-1.2.0.zip.sig`
 
 先上传 ZIP 与签名，确认可下载后再覆盖 `releases.json`，防止清单先指向尚未上传的文件。清单建议禁用缓存或设短缓存期；版本包与签名可长期缓存。以后发布时把文件名里的版本号替换为新版本即可。
 

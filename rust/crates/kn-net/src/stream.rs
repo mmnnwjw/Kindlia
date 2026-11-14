@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::verify_tls12_signature;
@@ -111,39 +111,48 @@ impl NetStream {
         connect_timeout: Duration,
         tls: Arc<ClientConfig>,
     ) -> Result<Self, NetError> {
-        let mut last_err = None;
-        let mut stream = None;
-        for candidate in crate::dns::resolve(host, port).map_err(|e| NetError::network(e.to_string()))? {
-            match TcpStream::connect_timeout(&candidate, connect_timeout) {
-                Ok(s) => {
-                    stream = Some(s);
-                    break;
+        let deadline = Instant::now() + connect_timeout;
+        let mut last_err = NetError::network("连接失败");
+        for candidate in crate::dns::resolve(host, port)? {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(NetError::Timeout);
+            }
+            let attempt = left.min(Duration::from_secs(8));
+            let connected = (|| {
+                let tcp = TcpStream::connect_timeout(&candidate, attempt)?;
+                tcp.set_nodelay(true).ok();
+                tcp.set_read_timeout(Some(attempt)).ok();
+                tcp.set_write_timeout(Some(attempt)).ok();
+                if !secure {
+                    return Ok(NetStream::Plain(tcp));
                 }
-                Err(e) => last_err = Some(e),
+                let server_name = ServerName::try_from(host.to_string())
+                    .map_err(|_| NetError::protocol("无效的服务器主机名"))?;
+                let conn = ClientConnection::new(tls.clone(), server_name)
+                    .map_err(|e| NetError::network(format!("TLS 初始化失败: {e}")))?;
+                let mut owned = StreamOwned::new(conn, tcp);
+                owned.flush()?;
+                Ok(NetStream::Tls(Box::new(owned)))
+            })();
+            match connected {
+                Ok(stream) => return Ok(stream),
+                Err(error) => {
+                    eprintln!("[net] {host} ({candidate}) TCP/TLS: {error}");
+                    crate::dns::failed(host, candidate.ip());
+                    last_err = error;
+                }
             }
         }
-        if stream.is_none() {
-            crate::dns::forget(host);
+        crate::dns::forget(host);
+        Err(last_err)
+    }
+
+    pub(crate) fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
+        match self {
+            NetStream::Plain(s) => s.peer_addr(),
+            NetStream::Tls(s) => s.get_ref().peer_addr(),
         }
-        let tcp = stream.ok_or_else(|| {
-            NetError::network(
-                last_err.map(|e| e.to_string()).unwrap_or_else(|| "连接失败".into()),
-            )
-        })?;
-        tcp.set_nodelay(true).ok();
-        // Bound TLS handshake writes as well as later request/response I/O.
-        tcp.set_read_timeout(Some(connect_timeout)).ok();
-        tcp.set_write_timeout(Some(connect_timeout)).ok();
-        if !secure {
-            return Ok(NetStream::Plain(tcp));
-        }
-        let server_name = ServerName::try_from(host.to_string())
-            .map_err(|_| NetError::protocol("无效的服务器主机名"))?;
-        let conn = ClientConnection::new(tls, server_name)
-            .map_err(|e| NetError::network(format!("TLS 初始化失败: {e}")))?;
-        let mut owned = StreamOwned::new(conn, tcp);
-        owned.flush().map_err(|e| NetError::network(format!("TLS 握手失败: {e}")))?;
-        Ok(NetStream::Tls(Box::new(owned)))
     }
 
     pub fn try_clone_raw(&self) -> io::Result<TcpStream> {

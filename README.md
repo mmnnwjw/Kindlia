@@ -45,7 +45,7 @@ Kindlia 与 KinNovel 互相独立运行，两者配置与数据目录彼此隔�
 - **多翻译源与排版引擎**：
   - 支持 Sakura、GPT、有道、百度等多翻译源自动或手动选择。
   - 支持纯译文、纯日文原文以及中日双语对照模式，可单独微调参考日文字号与灰度。
-  - 支持字号、行高、段距、首行缩进、页边距、横竖屏旋转与 OpenCC 简繁转换。
+  - 支持字号、行高、段距、首行缩进、页边距与横竖屏旋转。
   - 支持从本地字体目录无缝扫描加载 `.ttf`、`.otf` 或 `.ttc` 字体文件。
 - **EPUB 与离线支持**：
   - 支持 EPUB2 NCX 与 EPUB3 nav 目录解析、XHTML 正文、内联 CSS 选择器、栅格插图与嵌入式 SVG 封面。
@@ -80,7 +80,7 @@ Kindlia 与 KinNovel 互相独立运行，两者配置与数据目录彼此隔�
 
 ### 安装
 
-1. 前往项目的 [Releases 页面](https://github.com/mmnnwjw/Kindlia/releases) 下载最新的发布包（例如 `kindlia-1.1.1.zip`）。
+1. 前往项目的 [Releases 页面](https://github.com/mmnnwjw/Kindlia/releases) 下载最新的发布包（例如 `kindlia-1.2.0.zip`）。
 2. 将 Kindle 连接至电脑，解压压缩包，将内部的 `kindlia` 文件夹完整拷贝至 Kindle 盘符的 **`extensions/`** 目录：
    ```text
    /mnt/us/extensions/kindlia/
@@ -125,7 +125,6 @@ paragraph_spacing = 0.1                     # 额外段间距（行高倍数）�
 first_line_indent = true                    # 首行缩进（默认开启）
 margin = 34                                 # 页边距
 reader_font = ""                            # 字体文件名（空为系统默认）
-convert = ""                                # 简繁转换："" (关) / "t2s" (繁转简) / "s2t" (简转繁)
 
 # 翻译偏好
 translation = "auto"                        # auto / sakura / gpt / youdao / baidu
@@ -197,7 +196,7 @@ gateway_key = ""                            # 与 Worker 部署一致的私密�
 cd ..
 python tools/package_release.py
 ```
-执行后将在 `dist/` 目录下生成 `kindlia-1.1.1.zip`，可直接部署至设备。分发包仅包含运行文件、配置模板与许可证；使用说明和图文教程请查看本仓库。
+执行后将在 `dist/` 目录下生成 `kindlia-1.2.0.zip`，可直接部署至设备。分发包仅包含运行文件、配置模板与许可证；使用说明和图文教程请查看本仓库。
 
 ---
 

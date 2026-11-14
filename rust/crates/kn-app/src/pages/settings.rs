@@ -47,7 +47,6 @@ enum Field {
     CacheLimit,
     Lock,
     ChangeLock,
-    Convert,
     History,
 }
 fn fields(group: usize) -> &'static [(Field, &'static str)] {
@@ -62,7 +61,6 @@ fn fields(group: usize) -> &'static [(Field, &'static str)] {
             (Font, "阅读字体"),
             (Scan, "扫描字体目录"),
             (Prefetch, "章节预加载"),
-            (Convert, "简繁转换"),
         ],
         1 => &[
             (Night, "夜间模式"),
@@ -196,12 +194,6 @@ impl SettingsPage {
                 "向右转"
             } else {
                 "向左转"
-            }
-            .into(),
-            Convert => match self.draft.convert.as_str() {
-                "t2s" => "繁转简",
-                "s2t" => "简转繁",
-                _ => "关闭",
             }
             .into(),
             Lock => on(!self.draft.lock_pin.is_empty()),
@@ -457,7 +449,6 @@ impl Page<Kindlia> for SettingsPage {
                             cx.request_redraw(RefreshHint::Clean);
                             return Transition::None;
                         }
-                        Field::Convert => self.draft.convert = ["", "t2s", "s2t"][n].into(),
                         _ => {}
                     }
                     self.picker = None;
@@ -597,21 +588,6 @@ impl Page<Kindlia> for SettingsPage {
                                         "横屏握持",
                                         ["向左转", "向右转"],
                                         Some((self.draft.landscape_side == "right") as usize),
-                                    ),
-                                ))
-                            }
-                            Convert => {
-                                self.picker = Some((
-                                    field,
-                                    choice::Choice::new(
-                                        "简繁转换",
-                                        ["关闭", "繁转简", "简转繁"],
-                                        Some(
-                                            ["", "t2s", "s2t"]
-                                                .iter()
-                                                .position(|s| *s == self.draft.convert)
-                                                .unwrap_or(0),
-                                        ),
                                     ),
                                 ))
                             }

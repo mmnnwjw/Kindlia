@@ -73,6 +73,7 @@ pub struct LibraryPage {
     searching: bool,
     return_on_close: bool,
     picker: Option<(usize, choice::Choice)>,
+    // Freeze the complete mutation path when selecting a folder, including Web/Wenku.
     managing_folder: Option<(String, String)>,
     renaming_folder: bool,
     art: crate::cover_cache::Cache<Option<(crate::covers::Metadata, Bitmap)>>,

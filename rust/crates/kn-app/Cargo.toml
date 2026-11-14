@@ -23,6 +23,5 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 roxmltree = "0.20"
 libc.workspace = true
 simplecss = "0.2.2"
-brotli-decompressor = "4"
 
 ring = "0.17"

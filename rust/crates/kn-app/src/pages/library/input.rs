@@ -51,21 +51,14 @@ impl LibraryPage {
                     if field == usize::MAX - 2 {
                         let folder = self.managing_folder.take();
                         if n == 1 {
-                            if let Some((id, _)) = folder {
+                            if let Some((path, _)) = folder {
+                                self.generation += 1;
+                                self.loading = false;
                                 if cx.app.repo.offline {
                                     self.notice = "离线模式不可修改云端数据".into();
                                 } else {
                                     self.loading = true;
                                     let api = cx.app.repo.api.account_snapshot();
-                                    let section = if self.shelf_source == 2 {
-                                        "wenku"
-                                    } else {
-                                        "web"
-                                    };
-                                    let path = format!(
-                                        "user/favored-{section}/{}",
-                                        crate::api::encode(&id)
-                                    );
                                     cx.spawn(move || {
                                         FolderMutation(api.mutate(
                                             "DELETE",
@@ -102,7 +95,7 @@ impl LibraryPage {
             }
             return Transition::None;
         }
-        if !self.editing && !self.discover {
+        if !self.editing && !self.discover && !self.loading {
             if let InputEvent::Gesture(g) = event {
                 if g.kind == GestureKind::Long {
                     if let Some(id) = cx
@@ -119,9 +112,17 @@ impl LibraryPage {
                                 .get(self.page * self.rows + (id.0 - 200) as usize)
                             {
                                 let folder_id = folder["id"].as_str().unwrap_or("").to_owned();
-                                let title =
-                                    folder["title"].as_str().unwrap_or("收藏夹").to_owned();
-                                self.managing_folder = Some((folder_id, title.clone()));
+                                let title = folder["title"].as_str().unwrap_or("收藏夹").to_owned();
+                                let section = if self.shelf_source == 2 {
+                                    "wenku"
+                                } else {
+                                    "web"
+                                };
+                                let path = format!(
+                                    "user/favored-{section}/{}",
+                                    crate::api::encode(&folder_id)
+                                );
+                                self.managing_folder = Some((path, title.clone()));
                                 self.picker = Some((
                                     usize::MAX - 1,
                                     choice::Choice::new(
@@ -145,6 +146,14 @@ impl LibraryPage {
             }
         }
         if self.editing {
+            if self.renaming_folder && matches!(hit(cx, event), Some(1) | Some(25)) {
+                self.editing = false;
+                self.renaming_folder = false;
+                self.managing_folder = None;
+                self.editor.set_text("");
+                cx.request_redraw(RefreshHint::Clean);
+                return Transition::None;
+            }
             if let InputEvent::Gesture(g) = event {
                 if let Some(id) = cx
                     .hits
@@ -162,21 +171,14 @@ impl LibraryPage {
                                 self.renaming_folder = false;
                                 let folder = self.managing_folder.take();
                                 if !text.trim().is_empty() {
-                                    if let Some((folder_id, _)) = folder {
+                                    if let Some((path, _)) = folder {
+                                        self.generation += 1;
+                                        self.loading = false;
                                         if cx.app.repo.offline {
                                             self.notice = "离线模式不可修改云端数据".into();
                                         } else {
                                             self.loading = true;
                                             let api = cx.app.repo.api.account_snapshot();
-                                            let section = if self.shelf_source == 2 {
-                                                "wenku"
-                                            } else {
-                                                "web"
-                                            };
-                                            let path = format!(
-                                                "user/favored-{section}/{}",
-                                                crate::api::encode(&folder_id)
-                                            );
                                             cx.spawn(move || {
                                                 FolderMutation(api.mutate(
                                                     "PUT",
@@ -199,6 +201,10 @@ impl LibraryPage {
                     }
                     return Transition::None;
                 }
+            }
+            if self.renaming_folder {
+                // Editing a folder is modal: unrelated list/navigation hits cannot alter its target.
+                return Transition::None;
             }
         }
         if !self.local && !self.return_on_close {

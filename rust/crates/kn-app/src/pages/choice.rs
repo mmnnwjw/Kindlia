@@ -30,7 +30,7 @@ impl Choice {
     }
     pub fn wants_backdrop(&self) -> kn_ui::Backdrop {
         if self.backdrop.is_none() {
-            kn_ui::Backdrop::Screen
+            kn_ui::Backdrop::CleanFrame
         } else {
             kn_ui::Backdrop::None
         }

@@ -124,7 +124,6 @@ pub struct Config {
     pub ignore_ai: bool,
     pub cache_limit_mb: u32,
     pub lock_pin: String,
-    pub convert: String,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -170,7 +169,6 @@ impl Default for Config {
             ignore_ai: false,
             cache_limit_mb: 192,
             lock_pin: String::new(),
-            convert: String::new(),
         }
     }
 }

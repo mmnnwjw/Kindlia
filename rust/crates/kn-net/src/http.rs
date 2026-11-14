@@ -9,6 +9,11 @@ use crate::stream::NetStream;
 
 pub const USER_AGENT: &str = concat!("Kindlia/", env!("CARGO_PKG_VERSION"));
 
+/// Wi-Fi sleep invalidates idle TCP/TLS sessions even when monotonic idle time barely advances.
+pub fn clear_idle_connections() {
+    crate::pool::clear();
+}
+
 /// Parsed `scheme://host[:port]` pieces of a server URL (`config.py`'s
 /// `api_server`, e.g. `https://api.lightnovel.life`).
 pub struct ServerUrl {

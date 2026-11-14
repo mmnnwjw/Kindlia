@@ -45,13 +45,12 @@ struct CachedChapter {
 }
 fn text_signature(c: &crate::store::Config) -> String {
     format!(
-        "{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}",
         c.translation,
         c.show_original,
         c.show_translation,
         c.original_size,
-        c.original_gray,
-        c.convert
+        c.original_gray
     )
 }
 fn page_signature(cx: &Cx<Kindlia>) -> String {
@@ -980,7 +979,6 @@ impl ReaderPage {
         }
         self.rich = self.document.is_some() || self.blocks.iter().any(|b| !b.spans.is_empty());
         for b in std::sync::Arc::make_mut(&mut self.blocks) {
-            crate::conversion::apply(b, &cx.app.config.convert);
             let reference = b.path.starts_with("/jp/")
                 || (self.document.is_some()
                     && cx.app.config.show_original

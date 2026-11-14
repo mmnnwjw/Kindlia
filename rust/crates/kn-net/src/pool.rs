@@ -20,6 +20,11 @@ struct Idle {
 }
 static POOL: OnceLock<Mutex<Vec<Idle>>> = OnceLock::new();
 const IDLE: Duration = Duration::from_secs(20);
+pub(crate) fn clear() {
+    if let Some(pool) = POOL.get() {
+        pool.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
 fn debug(message: &str) {
     if std::env::var_os("KN_DEBUG").is_some() {
         eprintln!("[http-pool] {message}");
@@ -66,7 +71,13 @@ pub(crate) fn request(
             .rposition(|c| c.origin == origin && Arc::ptr_eq(&c.tls, &tls))
             .map(|i| pool.swap_remove(i))
     };
+    let deadline = Instant::now() + timeout;
+    let mut retries = 0;
     loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(NetError::Timeout);
+        }
         let was_reused = reused.is_some();
         let mut reader = if let Some(c) = reused.take() {
             debug("reuse");
@@ -77,12 +88,18 @@ pub(crate) fn request(
                 &url.host,
                 url.port,
                 url.secure,
-                timeout,
+                remaining,
                 tls.clone(),
             )?)
         };
-        reader.get_mut().set_read_timeout(Some(timeout)).ok();
-        reader.get_mut().set_write_timeout(Some(timeout)).ok();
+        let io_timeout = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_secs(12));
+        if io_timeout.is_zero() {
+            return Err(NetError::Timeout);
+        }
+        reader.get_mut().set_read_timeout(Some(io_timeout)).ok();
+        reader.get_mut().set_write_timeout(Some(io_timeout)).ok();
         let result = (|| {
             let mut head = format!(
                 "{method} {path} HTTP/1.1\r\nHost: {}\r\n",
@@ -107,6 +124,9 @@ pub(crate) fn request(
         })();
         match result {
             Ok((response, keep)) => {
+                if let Ok(peer) = reader.get_ref().peer_addr() {
+                    crate::dns::succeeded(&url.host, peer.ip());
+                }
                 if keep && reader.buffer().is_empty() {
                     let mut pool = POOL
                         .get_or_init(Mutex::default)
@@ -131,13 +151,30 @@ pub(crate) fn request(
                 }
                 return Ok(response);
             }
-            // An expired idle socket can fail before a response. Never replay writes.
-            Err(NetError::Network(ref text))
-                if text != "下载已取消" && was_reused && matches!(method, "GET" | "HEAD") =>
-            {
-                debug("stale idle; retry safe read once");
+            Err(error) => {
+                let retryable = matches!(&error, NetError::Timeout)
+                    || matches!(&error, NetError::Network(text) if text != "下载已取消");
+                if retryable {
+                    // A closed idle socket is normal; a stalled transfer should try another edge.
+                    if !was_reused || matches!(&error, NetError::Timeout) {
+                        if let Ok(peer) = reader.get_ref().peer_addr() {
+                            crate::dns::failed(&url.host, peer.ip());
+                            eprintln!("[net] {} ({peer}) HTTP: {error}", url.host);
+                        }
+                    }
+                }
+                // Replay at most once and only for safe reads. Never repeat a write or cancellation.
+                if retryable
+                    && retries == 0
+                    && matches!(method, "GET" | "HEAD")
+                    && Instant::now() < deadline
+                {
+                    retries += 1;
+                    debug("retry safe read on fresh connection");
+                } else {
+                    return Err(error);
+                }
             }
-            Err(e) => return Err(e),
         }
     }
 }

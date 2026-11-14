@@ -370,33 +370,7 @@ fn history_outbox_is_per_account_and_keeps_latest_chapter() {
 }
 
 #[test]
-fn conversion_preserves_note_objects_and_original_reference() {
-    let mut doc = kn_text::extract_document(
-        r##"<p><b>乾隆年間的頭髮</b><a epub:type="noteref" href="#note">注</a></p><aside id="note">說明</aside>"##,
-        "https://example.com",
-        true,
-    );
-    for b in &mut doc.blocks {
-        conversion::apply(b, "t2s");
-    }
-    let body = doc.blocks.iter().find(|b| b.text.contains("头发")).unwrap();
-    assert!(body.text.contains("乾隆年间"));
-    assert!(body
-        .spans
-        .iter()
-        .all(|s| s.end <= body.text.chars().count()));
-    for (at, object) in &body.objects {
-        if matches!(object, kn_text::Inline::Note(_)) {
-            assert_eq!(body.text.chars().nth(*at), Some(kn_text::OBJECT_CHAR));
-        }
-    }
-    let mut original = kn_text::Block {
-        text: "頭髮".into(),
-        path: "/jp/1".into(),
-        ..Default::default()
-    };
-    conversion::apply(&mut original, "t2s");
-    assert_eq!(original.text, "頭髮");
+fn fallback_cover_and_lock_pin() {
     let image = covers::fallback((100, 150)).unwrap();
     assert!(image.width() > 0 && image.width() <= 100 && image.height() <= 150);
     let pin = pages::lock::hash_pin("012345");

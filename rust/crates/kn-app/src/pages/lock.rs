@@ -7,7 +7,7 @@
 //! 设置流程里是「取消」。
 //!
 //! 样子是居中的弹窗 (参照 KOReader 的 screenlockpin 插件): 启动 / 唤醒时背景就是屏幕上原来的画面
-//! (启动画面 / 屏保, 从帧缓冲读回, `Backdrop::Screen`), 设置流程里是设置页 (`Backdrop::Below`); 只刷新弹窗。
+//! (系统画面 / 屏保, 从帧缓冲读回, `Backdrop::Screen`), 设置流程里是设置页 (`Backdrop::Below`); 只刷新弹窗。
 
 use kn_platform::{GestureKind, InputEvent};
 use kn_render::{Bitmap, Point, Rect};
@@ -311,7 +311,7 @@ impl LockPage {
         match self.mode.clone() {
             Mode::Unlock { resume } if correct => {
                 cx.app.unlock();
-                // 换成完整的页面 (背景是启动画面 / 屏保): 整屏闪刷
+                // 换成完整的页面 (背景是系统画面 / 屏保): 整屏闪刷
                 cx.request_redraw(RefreshHint::Flash);
                 return if resume {
                     Transition::Back
@@ -354,6 +354,19 @@ impl Page<Kindlia> for LockPage {
         PageId(195)
     }
 
+    fn orientation(&self, _app: &Kindlia) -> Option<kn_ui::Orientation> {
+        self.unlocking().then_some(kn_ui::Orientation::Portrait)
+    }
+
+    fn on_resume(&mut self, cx: &mut Cx<Kindlia>) {
+        if self.unlocking() {
+            self.backdrop = None;
+            self.backdrop_set = false;
+            self.digits.clear();
+            cx.request_redraw(RefreshHint::Ui);
+        }
+    }
+
     /// 弹窗只刷新自己那块, 进来时不闪
     fn flash_on_enter(&self) -> bool {
         false
@@ -378,11 +391,7 @@ impl Page<Kindlia> for LockPage {
         let (w, h) = (cx.width, cx.height);
         match &self.backdrop {
             Some(bg) if bg.width() == w && bg.height() == h => frame.blit(bg, bg.bounds(), 0, 0),
-            // 读不回屏幕时 (主机预览等): 启动用启动画面, 其余用纯底色
-            _ if self.mode == (Mode::Unlock { resume: false }) => {
-                let splash = Bitmap::new(w, h, theme.background);
-                frame.blit(&splash, splash.bounds(), 0, 0);
-            }
+            // 读不回实际屏幕时使用纯底色，不回退到休眠前的应用画面。
             _ => frame.fill_rect(frame.bounds(), theme.background),
         }
         // 等待结束时刷新提示

@@ -1,7 +1,6 @@
 pub mod account;
 pub mod api;
 pub mod comment_format;
-pub mod conversion;
 mod cover_cache;
 pub mod covers;
 pub mod crash;
@@ -19,7 +18,6 @@ pub mod paragraphs;
 pub mod progress;
 pub mod repository;
 pub mod sleep;
-pub mod splash;
 pub mod stats;
 pub mod store;
 #[cfg(test)]
@@ -156,9 +154,6 @@ impl Kindlia {
     }
 }
 impl App for Kindlia {
-    fn startup_hold(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(2)
-    }
     fn draw_toast(
         &self,
         frame: &mut kn_render::Bitmap,
@@ -206,6 +201,7 @@ impl App for Kindlia {
         None
     }
     fn on_resume(&mut self) {
+        self.repo.api.resume_network();
         if pages::lock::pin_set(&self.config) && !self.lock_showing {
             self.unlocked = false;
             self.lock_pending = true;
@@ -235,6 +231,7 @@ impl App for Kindlia {
     }
     fn home_page(&mut self) -> Box<dyn Page<Self>> {
         if pages::lock::pin_set(&self.config) && !self.unlocked {
+            self.lock_showing = true;
             return Box::new(pages::lock::LockPage::startup());
         }
         if !self.config.welcome_skipped && !self.repo.api.signed_in() && !self.repo.offline {

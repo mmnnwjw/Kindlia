@@ -79,6 +79,8 @@ pub enum Backdrop {
     None,
     /// 屏幕上现在的画面 (启动画面、屏保): 从帧缓冲读回, 背景一个像素都不刷新
     Screen,
+    /// 应用内弹窗使用干净的上一帧，避免将按钮按下反相留在背景中。
+    CleanFrame,
     /// 栈里下面那一页重新画一遍 (不带按下反馈的反相)
     Below,
 }
@@ -1076,8 +1078,11 @@ impl<A: App> Headless<A> {
         self.rt.expire_toast();
         let want = self.stack.top().page.wants_backdrop();
         if want != Backdrop::None {
-            let bg = if want == Backdrop::Screen {
+            let bg = if want == Backdrop::CleanFrame {
                 self.last_frame.clone()
+            } else if want == Backdrop::Screen {
+                // Headless has no physical framebuffer (e.g. a system screensaver).
+                None
             } else {
                 let n = self.stack.entries.len();
                 if n >= 2 {
@@ -1232,6 +1237,7 @@ pub fn run<A: App>(
             match event {
                 PowerEvent::GoingToScreenSaver if !sleeping => {
                     sleeping = true;
+                    frame_valid = false;
                     rt.toast = None;
                     let top = stack.top();
                     let instance = top.instance;
@@ -1276,6 +1282,7 @@ pub fn run<A: App>(
                 }
                 PowerEvent::OutOfScreenSaver if sleeping => {
                     sleeping = false;
+                    frame_valid = false;
                     power_key_at = None;
                     power.reclaim_framework();
                     // 给系统一点时间恢复背光/电源, 与 Python 版一致
@@ -1450,13 +1457,14 @@ pub fn run<A: App>(
                 if want != Backdrop::None {
                     let mut bg = Bitmap::new(rt.width, rt.height, rt.app.theme().background);
                     let got = match want {
-                        Backdrop::Screen => {
+                        Backdrop::Screen | Backdrop::CleanFrame => {
                             let ok = display.read_back(&mut bg);
                             if ok {
-                                // Adopt the physical pressed pixels for diffing, but keep
-                                // the clean parent frame as the modal's background.
+                                // Diff against physical pixels. Only application dialogs
+                                // replace their background with the clean logical frame;
+                                // unlock dialogs must keep the actual screensaver.
                                 scheduler.adopt(&bg);
-                                if frame_valid {
+                                if want == Backdrop::CleanFrame && frame_valid {
                                     bg.blit(&frame, frame.bounds(), 0, 0);
                                 }
                                 if hint == RefreshHint::Flash {

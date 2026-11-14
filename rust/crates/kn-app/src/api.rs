@@ -120,6 +120,21 @@ impl ApiClient {
         };
         Ok(())
     }
+    /// A Wi-Fi wake must not retain the previous network's connections, DNS or cooldowns.
+    pub fn resume_network(&self) {
+        self.health.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        http::clear_idle_connections();
+        for base in [&self.base, &self.auth_base, &self.forum_base] {
+            if let Ok(url) = url::Url::parse(base) {
+                if let Some(host) = url.host_str() { kn_net::dns::forget(host); }
+            }
+        }
+        if let Ok(url) = self.transport_url(&format!("{}/api/", self.base), false) {
+            if let Ok(url) = url::Url::parse(&url) {
+                if let Some(host) = url.host_str() { kn_net::dns::forget(host); }
+            }
+        }
+    }
     fn transport_url(&self, url: &str, image: bool) -> Result<String, String> {
         let Some(gateway) = &self.gateway else {
             return Ok(url.into());
@@ -171,8 +186,8 @@ impl ApiClient {
         cookie: Option<&str>,
     ) -> Result<http::HttpResponse, String> {
         let health = self.server_health(url);
-        if health.is_down() {
-            return Err("服务器暂不可达，已暂缓重复连接；稍后重试".into());
+        if let Some(wait) = health.retry_after() {
+            return Err(format!("连接连续失败，约 {} 秒后可重试", wait.as_secs() + 1));
         }
         self.limit.wait();
         let url = self.transport_url(url, false)?;
@@ -182,6 +197,9 @@ impl ApiClient {
             ("Content-Type", content.into()),
             ("User-Agent", kn_net::http::USER_AGENT.into()),
         ];
+        if method == "GET" {
+            headers.push(("Accept-Encoding", "gzip".into()));
+        }
         headers.extend(self.gateway_headers());
         if let Some(token) = token.filter(|s| !s.is_empty()) {
             headers.push(("Authorization", format!("Bearer {token}")));
@@ -278,15 +296,14 @@ impl ApiClient {
                 .clone();
             r = self.send(&url, method, body, content, Some(&token), None)?;
         }
-        check_status(&r)?;
         if r.header("Content-Encoding")
             .is_some_and(|e| e.eq_ignore_ascii_case("gzip"))
         {
-            kn_net::gzip::gunzip_limited(&r.body, 8 * 1024 * 1024)
-                .map_err(|e| format!("gzip: {e:?}"))
-        } else {
-            Ok(r.body)
+            r.body = kn_net::gzip::gunzip_limited(&r.body, 8 * 1024 * 1024)
+                .map_err(|e| format!("gzip: {e:?}"))?;
         }
+        check_status(&r)?;
+        Ok(r.body)
     }
     pub fn get<T: DeserializeOwned>(&self, route: &str) -> Result<T, String> {
         serde_json::from_slice(&self.request("GET", route, b"", "application/json")?)
@@ -362,8 +379,8 @@ impl ApiClient {
         let key = format!("image:{}", crate::model::digest(&url));
         self.gets.get(key, || {
             let health = self.server_health(&url);
-            if health.is_down() {
-                return Err("图片服务器暂不可达，稍后重试".into());
+            if let Some(wait) = health.retry_after() {
+                return Err(format!("图片连接连续失败，约 {} 秒后可重试", wait.as_secs() + 1));
             }
             let started = std::time::Instant::now();
             let result = http::download_with_headers(
